@@ -1,0 +1,23 @@
+{
+  "name": "tias",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.7.0"
+  },
+  "scripts": {
+    "dev": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri dev",
+    "dev:web": "vite",
+    "build": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri build",
+    "build:web": "vite build",
+    "preview:web": "vite preview",
+    "test": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/cli": "^2.10.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8"
+  }
+}
