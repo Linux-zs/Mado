@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tias",
+  "productName": "Mado",
   "version": "0.1.0",
-  "identifier": "com.tias.app",
+  "identifier": "com.mado.editor",
   "build": {
     "beforeDevCommand": "npm run dev:web",
     "beforeBuildCommand": "npm run build:web",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Tias",
+        "title": "Mado",
         "width": 1280,
         "height": 820,
         "minWidth": 960,
@@ -25,6 +25,18 @@
     ]
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["md"],
+        "name": "Markdown Document",
+        "description": "Mado Markdown document",
+        "role": "Editor",
+        "rank": "Default"
+      }
+    ]
   }
 }

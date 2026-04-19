@@ -1,9 +1,15 @@
 {
-  "name": "tias",
+  "name": "mado",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@milkdown/core": "^7.20.0",
+    "@milkdown/plugin-listener": "^7.20.0",
+    "@milkdown/preset-commonmark": "^7.20.0",
+    "@milkdown/preset-gfm": "^7.20.0",
+    "@milkdown/theme-nord": "^7.20.0",
+    "@milkdown/utils": "^7.20.0",
     "@tauri-apps/plugin-dialog": "^2.7.0"
   },
   "scripts": {
