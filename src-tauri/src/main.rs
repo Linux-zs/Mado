@@ -11,10 +11,15 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{
   menu::{
-    Menu, MenuBuilder, MenuItem, MenuItemBuilder, MenuItemKind, Submenu, SubmenuBuilder,
+    Menu, MenuBuilder, MenuItem, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, Submenu,
+    SubmenuBuilder,
   },
   AppHandle, Emitter, Manager, Runtime, State,
 };
+#[cfg(windows)]
+use tauri::webview::PlatformWebview;
+#[cfg(windows)]
+use windows_core::Interface;
 
 const MENU_OPEN_FILE_ID: &str = "file-open";
 const MENU_OPEN_FOLDER_ID: &str = "file-open-folder";
@@ -23,19 +28,14 @@ const MENU_SAVE_FILE_ID: &str = "file-save";
 const MENU_SAVE_AS_FILE_ID: &str = "file-save-as";
 const MENU_RENAME_FILE_ID: &str = "file-rename";
 const MENU_CLOSE_FILE_ID: &str = "file-close";
+const MENU_EDIT_UNDO_ID: &str = "edit-undo";
+const MENU_EDIT_REDO_ID: &str = "edit-redo";
+const MENU_EDIT_FIND_ID: &str = "edit-find";
+const MENU_EDIT_REPLACE_ID: &str = "edit-replace";
 const MENU_CLEAR_RECENT_FILES_ID: &str = "file-clear-recent";
 const MENU_RECENT_FILE_PREFIX: &str = "file-recent-open:";
 const RECENT_FILES_MENU_LIMIT: usize = 10;
-const OPEN_FILE_EVENT: &str = "request-open-markdown-file";
-const OPEN_FOLDER_EVENT: &str = "request-open-markdown-folder";
-const NEW_FILE_EVENT: &str = "request-new-markdown-file";
-const SAVE_FILE_EVENT: &str = "request-save-markdown-file";
-const SAVE_AS_FILE_EVENT: &str = "request-save-as-markdown-file";
-const RENAME_FILE_EVENT: &str = "request-rename-markdown-file";
-const CLOSE_FILE_EVENT: &str = "request-close-markdown-file";
-const CLEAR_RECENT_FILES_EVENT: &str = "request-clear-recent-files";
-const OPEN_RECENT_FILE_EVENT: &str = "request-open-recent-file";
-const EDITOR_COMMAND_EVENT: &str = "request-editor-command";
+const APP_COMMAND_EVENT: &str = "request-app-command";
 const EDITOR_COMMAND_MENU_PREFIX: &str = "editor-command:";
 const TEXT_FILE_SCAN_MAX_DEPTH: usize = 8;
 const TEXT_FILE_SCAN_MAX_FILES: usize = 2000;
@@ -55,6 +55,35 @@ const IGNORED_TEXT_SCAN_DIRECTORIES: &[&str] = &[
 ];
 
 struct RecentFileMenuState(Mutex<Vec<String>>);
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MenuEnabledState {
+  id: String,
+  enabled: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum AppCommandPayload {
+  NewFile,
+  OpenFile,
+  OpenFolder,
+  SaveFile,
+  SaveAsFile,
+  RenameFile,
+  CloseFile,
+  ClearRecentFiles,
+  OpenRecentFile { path: String },
+  EditCommand {
+    #[serde(rename = "commandId")]
+    command_id: String,
+  },
+  EditorCommand {
+    #[serde(rename = "commandId")]
+    command_id: String,
+  },
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,20 +161,53 @@ fn update_recent_files_menu(
   state: State<RecentFileMenuState>,
   entries: Vec<RecentMenuEntry>,
 ) -> Result<(), String> {
-  {
-    let mut paths = state
-      .0
-      .lock()
-      .map_err(|_| "Failed to lock recent files menu state.".to_string())?;
-    *paths = entries.iter().map(|entry| entry.file_path.clone()).collect();
+  update_recent_file_menu_items(&app, &entries).map_err(|error| error.to_string())?;
+
+  let mut paths = state
+    .0
+    .lock()
+    .map_err(|_| "Failed to lock recent files menu state.".to_string())?;
+  *paths = entries.iter().map(|entry| entry.file_path.clone()).collect();
+  Ok(())
+}
+
+#[tauri::command]
+fn update_menu_enabled_states(app: AppHandle, states: Vec<MenuEnabledState>) -> Result<(), String> {
+  let Some(menu) = app.menu() else {
+    return Ok(());
+  };
+
+  let menu_items = menu.items().map_err(|error| error.to_string())?;
+
+  for state in states {
+    let Some(item) =
+      find_menu_item_by_id(menu_items.clone(), &state.id).map_err(|error| error.to_string())?
+    else {
+      continue;
+    };
+
+    item
+      .set_enabled(state.enabled)
+      .map_err(|error| error.to_string())?;
   }
 
-  update_recent_file_menu_items(&app, &entries).map_err(|error| error.to_string())
+  Ok(())
+}
+
+#[tauri::command]
+fn validate_markdown_file_name(new_name: String) -> Result<String, String> {
+  normalize_markdown_file_name(&new_name)
+}
+
+#[tauri::command]
+fn validate_markdown_save_path(path: String) -> Result<String, String> {
+  normalize_markdown_save_path(&path)
 }
 
 #[tauri::command]
 fn save_markdown_file(path: String, content: String) -> Result<OpenedDocument, String> {
-  let file_path = Path::new(&path);
+  let normalized_path = normalize_markdown_save_path(&path)?;
+  let file_path = Path::new(&normalized_path);
   fs::write(file_path, content).map_err(|error| format!("Failed to save file: {error}"))?;
   read_markdown_document(file_path)
 }
@@ -348,8 +410,8 @@ fn is_supported_text_file(file_path: &Path) -> bool {
   )
 }
 
-fn normalize_markdown_file_name(new_name: &str) -> Result<String, String> {
-  let trimmed = new_name.trim();
+fn normalize_file_name_component(file_name: &str) -> Result<String, String> {
+  let trimmed = file_name.trim().trim_end_matches([' ', '.']);
 
   if trimmed.is_empty() {
     return Err("The file name cannot be empty.".to_string());
@@ -363,6 +425,60 @@ fn normalize_markdown_file_name(new_name: &str) -> Result<String, String> {
     return Err("The file name contains characters not allowed on Windows.".to_string());
   }
 
+  let stem = trimmed.trim_start_matches('.');
+
+  if stem.is_empty() {
+    return Err("The file name must include a name before the extension.".to_string());
+  }
+
+  if matches!(trimmed.rfind('.'), Some(0)) {
+    return Err("The file name must include a name before the extension.".to_string());
+  }
+
+  let reserved_stem = trimmed
+    .rsplit_once('.')
+    .map(|(name, _)| name)
+    .unwrap_or(trimmed)
+    .trim_end_matches([' ', '.'])
+    .to_ascii_uppercase();
+
+  if matches!(
+    reserved_stem.as_str(),
+    "CON"
+      | "PRN"
+      | "AUX"
+      | "NUL"
+      | "COM1"
+      | "COM2"
+      | "COM3"
+      | "COM4"
+      | "COM5"
+      | "COM6"
+      | "COM7"
+      | "COM8"
+      | "COM9"
+      | "LPT1"
+      | "LPT2"
+      | "LPT3"
+      | "LPT4"
+      | "LPT5"
+      | "LPT6"
+      | "LPT7"
+      | "LPT8"
+      | "LPT9"
+  ) {
+    return Err("The file name is reserved by Windows and cannot be used.".to_string());
+  }
+
+  Ok(trimmed.to_string())
+}
+
+fn is_supported_save_extension(extension: &str) -> bool {
+  matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt")
+}
+
+fn normalize_markdown_file_name(new_name: &str) -> Result<String, String> {
+  let trimmed = normalize_file_name_component(new_name)?;
   let dot_index = trimmed.rfind('.');
 
   let normalized = match dot_index {
@@ -370,7 +486,7 @@ fn normalize_markdown_file_name(new_name: &str) -> Result<String, String> {
       let extension = trimmed[index + 1..].to_ascii_lowercase();
 
       if extension == "md" || extension == "markdown" || extension == "txt" {
-        trimmed.to_string()
+        trimmed
       } else {
         return Err("The file name must end with .md, .markdown or .txt.".to_string());
       }
@@ -379,6 +495,37 @@ fn normalize_markdown_file_name(new_name: &str) -> Result<String, String> {
   };
 
   Ok(normalized)
+}
+
+fn normalize_markdown_save_path(path: &str) -> Result<String, String> {
+  let trimmed = path.trim();
+
+  if trimmed.is_empty() {
+    return Err("The save path cannot be empty.".to_string());
+  }
+
+  let mut normalized_path = PathBuf::from(trimmed);
+  let file_name = normalized_path
+    .file_name()
+    .ok_or_else(|| "The save path must include a file name.".to_string())?
+    .to_str()
+    .ok_or_else(|| "The save path contains characters that are not supported.".to_string())?;
+  let normalized_file_name = normalize_file_name_component(file_name)?;
+  let normalized_name = match normalized_file_name.rfind('.') {
+    Some(index) if index > 0 && index < normalized_file_name.len() - 1 => {
+      let extension = &normalized_file_name[index + 1..];
+
+      if is_supported_save_extension(extension) {
+        normalized_file_name
+      } else {
+        return Err("The file name must end with .md, .markdown or .txt.".to_string());
+      }
+    }
+    _ => format!("{normalized_file_name}.md"),
+  };
+  normalized_path.set_file_name(normalized_name);
+
+  Ok(normalized_path.to_string_lossy().into_owned())
 }
 
 fn menu_item<R: Runtime>(
@@ -593,7 +740,19 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     .separator()
     .item(&menu_item(app, MENU_CLOSE_FILE_ID, "\u{5173}\u{95ed}", Some("Ctrl+W"))?)
     .build()?;
-  let edit_menu = SubmenuBuilder::new(app, "\u{7f16}\u{8f91}(&E)").build()?;
+  let edit_menu = SubmenuBuilder::new(app, "\u{7f16}\u{8f91}(&E)")
+    .item(&menu_item(app, MENU_EDIT_UNDO_ID, "\u{64a4}\u{9500}", Some("Ctrl+Z"))?)
+    .item(&menu_item(app, MENU_EDIT_REDO_ID, "\u{6062}\u{590d}", Some("Ctrl+Y"))?)
+    .separator()
+    .item(&PredefinedMenuItem::cut(app, Some("\u{526a}\u{5207}"))?)
+    .item(&PredefinedMenuItem::copy(app, Some("\u{590d}\u{5236}"))?)
+    .item(&PredefinedMenuItem::paste(app, Some("\u{7c98}\u{8d34}"))?)
+    .separator()
+    .item(&menu_item(app, MENU_EDIT_FIND_ID, "\u{67e5}\u{627e}", Some("Ctrl+F"))?)
+    .item(&menu_item(app, MENU_EDIT_REPLACE_ID, "\u{66ff}\u{6362}", Some("Ctrl+H"))?)
+    .separator()
+    .item(&PredefinedMenuItem::select_all(app, Some("\u{5168}\u{9009}"))?)
+    .build()?;
   let paragraph_menu = SubmenuBuilder::new(app, "\u{6bb5}\u{843d}(&P)")
     .item(&editor_command_menu_item(
       app,
@@ -747,6 +906,65 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     .build()
 }
 
+fn emit_app_command<R: Runtime>(app: &AppHandle<R>, payload: AppCommandPayload) {
+  if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, payload) {
+    eprintln!("Failed to emit app command to main webview: {error}");
+  }
+}
+
+#[cfg(windows)]
+fn disable_windows_browser_accelerator_keys<R: Runtime>(app: &AppHandle<R>) {
+  let Some(main_webview) = app.get_webview_window("main") else {
+    eprintln!("Failed to resolve main webview while configuring browser accelerator keys.");
+    return;
+  };
+
+  if let Err(error) = main_webview.with_webview(|webview: PlatformWebview| unsafe {
+    let result = webview.controller().CoreWebView2().and_then(|core_webview| {
+      core_webview.Settings().and_then(|settings| {
+        settings
+          .cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3>()?
+          .SetAreBrowserAcceleratorKeysEnabled(false)
+      })
+    });
+
+    if let Err(error) = result {
+      eprintln!("Failed to disable WebView2 browser accelerator keys: {error}");
+    }
+  }) {
+    eprintln!("Failed to access main webview while configuring accelerator keys: {error}");
+  }
+}
+
+#[cfg(not(windows))]
+fn disable_windows_browser_accelerator_keys<R: Runtime>(_app: &AppHandle<R>) {}
+
+fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
+  match menu_id {
+    MENU_NEW_FILE_ID => Some(AppCommandPayload::NewFile),
+    MENU_OPEN_FILE_ID => Some(AppCommandPayload::OpenFile),
+    MENU_OPEN_FOLDER_ID => Some(AppCommandPayload::OpenFolder),
+    MENU_SAVE_FILE_ID => Some(AppCommandPayload::SaveFile),
+    MENU_SAVE_AS_FILE_ID => Some(AppCommandPayload::SaveAsFile),
+    MENU_RENAME_FILE_ID => Some(AppCommandPayload::RenameFile),
+    MENU_CLOSE_FILE_ID => Some(AppCommandPayload::CloseFile),
+    MENU_EDIT_UNDO_ID => Some(AppCommandPayload::EditCommand {
+      command_id: "undo".to_string(),
+    }),
+    MENU_EDIT_REDO_ID => Some(AppCommandPayload::EditCommand {
+      command_id: "redo".to_string(),
+    }),
+    MENU_EDIT_FIND_ID => Some(AppCommandPayload::EditCommand {
+      command_id: "find".to_string(),
+    }),
+    MENU_EDIT_REPLACE_ID => Some(AppCommandPayload::EditCommand {
+      command_id: "replace".to_string(),
+    }),
+    MENU_CLEAR_RECENT_FILES_ID => Some(AppCommandPayload::ClearRecentFiles),
+    _ => None,
+  }
+}
+
 fn main() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
@@ -756,50 +974,32 @@ fn main() {
       list_text_files,
       save_markdown_file,
       rename_markdown_file,
-      update_recent_files_menu
+      validate_markdown_file_name,
+      validate_markdown_save_path,
+      update_recent_files_menu,
+      update_menu_enabled_states
     ])
     .setup(|app| {
       let menu = build_app_menu(app.handle())?;
       app.set_menu(menu)?;
+      disable_windows_browser_accelerator_keys(app.handle());
       Ok(())
     })
     .on_menu_event(|app, event| {
-      if event.id() == MENU_NEW_FILE_ID {
-        let _ = app.emit_to("main", NEW_FILE_EVENT, ());
-      }
-
-      if event.id() == MENU_OPEN_FILE_ID {
-        let _ = app.emit_to("main", OPEN_FILE_EVENT, ());
-      }
-
-      if event.id() == MENU_OPEN_FOLDER_ID {
-        let _ = app.emit_to("main", OPEN_FOLDER_EVENT, ());
-      }
-
-      if event.id() == MENU_SAVE_FILE_ID {
-        let _ = app.emit_to("main", SAVE_FILE_EVENT, ());
-      }
-
-      if event.id() == MENU_SAVE_AS_FILE_ID {
-        let _ = app.emit_to("main", SAVE_AS_FILE_EVENT, ());
-      }
-
-      if event.id() == MENU_RENAME_FILE_ID {
-        let _ = app.emit_to("main", RENAME_FILE_EVENT, ());
-      }
-
-      if event.id() == MENU_CLOSE_FILE_ID {
-        let _ = app.emit_to("main", CLOSE_FILE_EVENT, ());
-      }
-
-      if event.id() == MENU_CLEAR_RECENT_FILES_ID {
-        let _ = app.emit_to("main", CLEAR_RECENT_FILES_EVENT, ());
-      }
-
       let menu_id = event.id().as_ref();
 
+      if let Some(payload) = app_command_for_menu_id(menu_id) {
+        emit_app_command(app, payload);
+        return;
+      }
+
       if let Some(command_id) = menu_id.strip_prefix(EDITOR_COMMAND_MENU_PREFIX) {
-        let _ = app.emit_to("main", EDITOR_COMMAND_EVENT, command_id.to_string());
+        emit_app_command(
+          app,
+          AppCommandPayload::EditorCommand {
+            command_id: command_id.to_string(),
+          },
+        );
         return;
       }
 
@@ -817,7 +1017,10 @@ fn main() {
         };
 
         if let Some(path) = paths.get(index) {
-          let _ = app.emit_to("main", OPEN_RECENT_FILE_EVENT, path);
+          emit_app_command(
+            app,
+            AppCommandPayload::OpenRecentFile { path: path.clone() },
+          );
         }
       }
     })
@@ -828,6 +1031,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
   use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -942,5 +1146,157 @@ mod tests {
     assert_eq!(entry.preview, "first line second");
 
     fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn normalize_markdown_file_name_fixes_trailing_dot() {
+    let normalized =
+      normalize_markdown_file_name("notes.").expect("trailing dot should normalize to .md");
+
+    assert_eq!(normalized, "notes.md");
+  }
+
+  #[test]
+  fn normalize_markdown_file_name_rejects_extension_only_name() {
+    let error = normalize_markdown_file_name(".md").expect_err("extension-only names should fail");
+
+    assert_eq!(error, "The file name must include a name before the extension.");
+  }
+
+  #[test]
+  fn normalize_markdown_file_name_rejects_windows_reserved_name() {
+    let error = normalize_markdown_file_name("CON").expect_err("reserved names should fail");
+
+    assert_eq!(error, "The file name is reserved by Windows and cannot be used.");
+  }
+
+  #[test]
+  fn normalize_markdown_file_name_accepts_supported_extensions() {
+    assert_eq!(
+      normalize_markdown_file_name("notes.markdown").expect("markdown extension should pass"),
+      "notes.markdown"
+    );
+    assert_eq!(
+      normalize_markdown_file_name("notes.txt").expect("txt extension should pass"),
+      "notes.txt"
+    );
+  }
+
+  #[test]
+  fn normalize_markdown_file_name_rejects_unsupported_extension() {
+    let error =
+      normalize_markdown_file_name("notes.exe").expect_err("unsupported extension should fail");
+
+    assert_eq!(error, "The file name must end with .md, .markdown or .txt.");
+  }
+
+  #[test]
+  fn normalize_markdown_file_name_rejects_additional_windows_reserved_name() {
+    let error = normalize_markdown_file_name("NUL").expect_err("reserved names should fail");
+
+    assert_eq!(error, "The file name is reserved by Windows and cannot be used.");
+  }
+
+  #[test]
+  fn normalize_markdown_save_path_appends_md_when_missing_extension() {
+    let path = Path::new("notes");
+    let normalized = normalize_markdown_save_path(path.to_string_lossy().as_ref())
+      .expect("save path without extension should normalize");
+
+    assert_eq!(PathBuf::from(normalized), Path::new("notes.md"));
+  }
+
+  #[test]
+  fn normalize_markdown_save_path_fixes_trailing_dot() {
+    let path = Path::new("folder").join("notes.");
+    let normalized = normalize_markdown_save_path(path.to_string_lossy().as_ref())
+      .expect("save path with trailing dot should normalize");
+
+    assert_eq!(PathBuf::from(normalized), Path::new("folder").join("notes.md"));
+  }
+
+  #[test]
+  fn normalize_markdown_save_path_accepts_supported_extensions() {
+    let markdown_dot_md_path = Path::new("folder").join("notes.md");
+    let markdown_path = Path::new("folder").join("notes.markdown");
+    let text_path = Path::new("folder").join("notes.txt");
+    let executable_markdown_path = Path::new("folder").join("notes.exe.md");
+
+    assert_eq!(
+      PathBuf::from(
+        normalize_markdown_save_path(markdown_dot_md_path.to_string_lossy().as_ref())
+          .expect("md path should pass")
+      ),
+      markdown_dot_md_path
+    );
+    assert_eq!(
+      PathBuf::from(
+        normalize_markdown_save_path(markdown_path.to_string_lossy().as_ref())
+          .expect("markdown path should pass")
+      ),
+      markdown_path
+    );
+    assert_eq!(
+      PathBuf::from(
+        normalize_markdown_save_path(text_path.to_string_lossy().as_ref())
+          .expect("text path should pass")
+      ),
+      text_path
+    );
+    assert_eq!(
+      PathBuf::from(
+        normalize_markdown_save_path(executable_markdown_path.to_string_lossy().as_ref())
+          .expect("save path ending in markdown extension should pass")
+      ),
+      executable_markdown_path
+    );
+  }
+
+  #[test]
+  fn normalize_markdown_save_path_rejects_reserved_name() {
+    let path = Path::new("folder").join("CON");
+    let error = normalize_markdown_save_path(path.to_string_lossy().as_ref())
+      .expect_err("reserved save name should fail");
+
+    assert_eq!(error, "The file name is reserved by Windows and cannot be used.");
+  }
+
+  #[test]
+  fn normalize_markdown_save_path_rejects_unsupported_extension() {
+    let path = Path::new("folder").join("notes.exe");
+    let error = normalize_markdown_save_path(path.to_string_lossy().as_ref())
+      .expect_err("unsupported save extension should fail");
+
+    assert_eq!(error, "The file name must end with .md, .markdown or .txt.");
+  }
+
+  #[test]
+  fn app_command_payload_serializes_command_id_in_camel_case() {
+    let payload = AppCommandPayload::EditorCommand {
+      command_id: "inline-strong".to_string(),
+    };
+
+    let value = serde_json::to_value(payload).expect("payload should serialize");
+
+    assert_eq!(
+      value,
+      json!({
+        "type": "editorCommand",
+        "commandId": "inline-strong"
+      })
+    );
+  }
+
+  #[test]
+  fn app_command_for_menu_id_maps_file_and_edit_commands() {
+    assert!(matches!(
+      app_command_for_menu_id(MENU_SAVE_FILE_ID),
+      Some(AppCommandPayload::SaveFile)
+    ));
+
+    assert!(matches!(
+      app_command_for_menu_id(MENU_EDIT_UNDO_ID),
+      Some(AppCommandPayload::EditCommand { command_id }) if command_id == "undo"
+    ));
   }
 }

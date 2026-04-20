@@ -41,6 +41,8 @@ import {
   moveTableRow,
   selectedRect
 } from '@milkdown/prose/tables';
+import { history as proseHistory, redo, redoDepth, undo, undoDepth } from '@milkdown/prose/history';
+import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import type { EditorView } from '@milkdown/prose/view';
 import { nord } from '@milkdown/theme-nord';
 import remarkGfm from 'remark-gfm';
@@ -72,6 +74,11 @@ type DocumentState = {
   listOrder: number;
   editorScrollTop: number;
   editorScrollLeft: number;
+  editorSelectionFrom: number;
+  editorSelectionTo: number;
+  sourceSelectionStart: number;
+  sourceSelectionEnd: number;
+  sourceScrollTop: number;
 };
 
 type RecentFileEntry = {
@@ -237,17 +244,72 @@ type RenameDialogOptions = {
   confirmText: string;
 };
 
-const OPEN_FILE_EVENT = 'request-open-markdown-file';
-const OPEN_FOLDER_EVENT = 'request-open-markdown-folder';
-const NEW_FILE_EVENT = 'request-new-markdown-file';
-const SAVE_FILE_EVENT = 'request-save-markdown-file';
-const SAVE_AS_FILE_EVENT = 'request-save-as-markdown-file';
-const RENAME_FILE_EVENT = 'request-rename-markdown-file';
-const CLOSE_FILE_EVENT = 'request-close-markdown-file';
-const CLEAR_RECENT_FILES_EVENT = 'request-clear-recent-files';
-const OPEN_RECENT_FILE_EVENT = 'request-open-recent-file';
-const EDITOR_COMMAND_EVENT = 'request-editor-command';
-const MARKDOWN_FILTERS = [
+type AppCommandSource = 'native-menu' | 'keyboard' | 'ui';
+type EditCommandId = 'undo' | 'redo' | 'find' | 'replace';
+type FindReplaceMode = 'find' | 'replace';
+type RenderedTextSegment = {
+  text: string;
+  boundaries: number[];
+};
+type FindMatch =
+  | {
+      kind: 'rendered';
+      from: number;
+      to: number;
+    }
+  | {
+      kind: 'source';
+      start: number;
+      end: number;
+    };
+type SourceHistoryState = {
+  snapshot: string;
+  undoStack: string[];
+  redoStack: string[];
+};
+type HighlightJsLanguageDefinition = unknown;
+type HighlightJsModule = {
+  default: HighlightJsLanguageDefinition;
+};
+type HighlightJsApi = {
+  getLanguage: (name: string) => unknown;
+  registerLanguage: (name: string, language: HighlightJsLanguageDefinition) => void;
+  highlight: (
+    code: string,
+    options: {
+      language: string;
+      ignoreIllegals: boolean;
+    }
+  ) => { value: string };
+};
+type HighlightLanguageLoader = () => Promise<HighlightJsModule>;
+type MenuEnabledState = {
+  id: string;
+  enabled: boolean;
+};
+type EditorCommandContext = {
+  activeDocument: DocumentState | null;
+  isRenderedReady: boolean;
+  hasSelection: boolean;
+  isInHeading: boolean;
+  isInTable: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
+const APP_COMMAND_EVENT = 'request-app-command';
+const EDITOR_COMMAND_MENU_PREFIX = 'editor-command:';
+const MENU_EDIT_UNDO_ID = 'edit-undo';
+const MENU_EDIT_REDO_ID = 'edit-redo';
+const MENU_EDIT_FIND_ID = 'edit-find';
+const MENU_EDIT_REPLACE_ID = 'edit-replace';
+const OPEN_MARKDOWN_FILTERS = [
+  {
+    name: 'Text',
+    extensions: ['md', 'markdown', 'txt']
+  }
+];
+const SAVE_MARKDOWN_FILTERS = [
   {
     name: 'Text',
     extensions: ['md', 'markdown', 'txt']
@@ -328,17 +390,38 @@ const EDITOR_COMMAND_IDS = {
 } as const;
 
 type EditorCommandId = (typeof EDITOR_COMMAND_IDS)[keyof typeof EDITOR_COMMAND_IDS];
+type AppCommandPayload =
+  | { type: 'newFile' }
+  | { type: 'openFile' }
+  | { type: 'openFolder' }
+  | { type: 'saveFile' }
+  | { type: 'saveAsFile' }
+  | { type: 'renameFile' }
+  | { type: 'closeFile' }
+  | { type: 'clearRecentFiles' }
+  | { type: 'openRecentFile'; path: string }
+  | { type: 'editCommand'; commandId: EditCommandId }
+  | { type: 'editorCommand'; commandId: string };
 type MilkdownCtxAccessor = {
   get: <T>(slice: unknown) => T;
 };
-type ShortcutDefinition = {
-  commandId: EditorCommandId;
+type ShortcutBinding = {
   key?: string;
   code?: string;
   ctrl: boolean;
   shift: boolean;
   alt: boolean;
 };
+type ShortcutDefinition = ShortcutBinding & {
+  commandId: EditorCommandId;
+};
+type FileShortcutDefinition = ShortcutBinding & {
+  command: Exclude<AppCommandPayload, { type: 'openRecentFile' }>;
+};
+type EditShortcutDefinition = ShortcutBinding & {
+  commandId: EditCommandId;
+};
+type EditorViewMode = 'rendered' | 'source';
 
 type RenderRequest = {
   editor?: boolean;
@@ -370,10 +453,13 @@ let directoryFilesNotice: string | null = null;
 let directoryFilesLoadToken = 0;
 let sidebarMode: SidebarMode = FILES_MODE;
 let sidebarVisibleMode: SidebarMode = FILES_MODE;
+let isSidebarCollapsed = false;
+let sidebarCollapsedBeforeSourceMode = false;
 let sidebarScrollPositions = new Map<SidebarMode, { top: number; left: number }>();
 let headerNotice: { text: string; isError: boolean } | null = null;
 let headerNoticeTimer: number | null = null;
 let renameDialogResolver: ((value: string | null) => void) | null = null;
+let editorViewMode: EditorViewMode = 'rendered';
 let milkdownEditor: Editor | null = null;
 let milkdownDocumentId: string | null = null;
 let milkdownHost: HTMLDivElement | null = null;
@@ -406,24 +492,156 @@ let renderFilesSidebarPending = false;
 let renderOutlineSidebarPending = false;
 let renderAnimateSidebarPending = false;
 let renderActivationToken: number | null = null;
-let lastKeyboardEditorCommandInvocation: { commandId: EditorCommandId; timestamp: number } | null = null;
+let lastKeyboardCommandInvocation: { key: string; timestamp: number } | null = null;
+let findReplaceOpen = false;
+let findReplaceMode: FindReplaceMode = 'find';
+let findReplaceMatches: FindMatch[] = [];
+let findReplaceActiveIndex = -1;
+let menuStateSyncTimer: number | null = null;
 let sidebarViewTransitionTimer: number | null = null;
 let editorSurfaceTransitionTimer: number | null = null;
 let editorSurfaceTransitionToken = 0;
 let highlightedHeadingElement: HTMLElement | null = null;
 let highlightedHeadingClearTimer: number | null = null;
 let currentOutlineActivePos: number | null = null;
+let sourceHistoryByDocument = new Map<string, SourceHistoryState>();
+let renameDialogValidationPending = false;
+let renameDialogValidationToken = 0;
+let highlightJsApi: HighlightJsApi | null = null;
+let highlightJsLoadPromise: Promise<HighlightJsApi> | null = null;
+let codeBlockHighlightRefreshFrame: number | null = null;
+const pendingHighlightLanguageLoads = new Map<string, Promise<boolean>>();
+const registeredHighlightLanguages = new Set<string>();
+const codeBlockHighlightViews = new Set<EditorView>();
+const codeBlockHighlightMarkupCache = new Map<string, string>();
 const fileTreeRowNodeCache = new Map<string, HTMLElement>();
 const outlineItemNodeCache = new Map<string, HTMLButtonElement>();
 const fileTreeRowParts = new WeakMap<HTMLElement, FileTreeRowParts>();
 let fileTreeExpansionState = loadFileTreeExpansionState();
 
-const EDITOR_COMMAND_DEDUP_WINDOW_MS = 150;
+const EDITOR_COMMAND_DEDUP_WINDOW_MS = 60;
+const SOURCE_HISTORY_LIMIT = 100;
+const NATIVE_MENU_STATE_SYNC_DELAY_MS = 40;
+const CODE_BLOCK_HIGHLIGHT_CACHE_LIMIT = 80;
+const CODE_BLOCK_HIGHLIGHT_REFRESH_META = 'TIAS_CODE_BLOCK_HIGHLIGHT_REFRESH';
 const SIDEBAR_VIEW_TRANSITION_MS = 170;
 const EDITOR_SURFACE_TRANSITION_MS = 180;
 const HEADING_TARGET_HIGHLIGHT_MS = 900;
 const EDITOR_SCROLL_REVEAL_OFFSET = 28;
 const reducedMotionMediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+const codeBlockHighlightParser = new DOMParser();
+const CODE_BLOCK_LANGUAGE_ALIASES: Record<string, string> = {
+  shell: 'bash',
+  sh: 'bash',
+  zsh: 'bash',
+  bash: 'bash',
+  console: 'bash',
+  shellsession: 'bash',
+  powershell: 'powershell',
+  ps1: 'powershell',
+  python: 'python',
+  py: 'python',
+  sql: 'sql',
+  javascript: 'javascript',
+  js: 'javascript',
+  jsx: 'javascript',
+  typescript: 'typescript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'ini',
+  ini: 'ini',
+  docker: 'dockerfile',
+  dockerfile: 'dockerfile',
+  html: 'xml',
+  htm: 'xml',
+  xml: 'xml',
+  svg: 'xml',
+  css: 'css',
+  scss: 'scss',
+  less: 'less',
+  markdown: 'markdown',
+  md: 'markdown',
+  rust: 'rust',
+  rs: 'rust',
+  go: 'go',
+  java: 'java',
+  kotlin: 'kotlin',
+  kt: 'kotlin',
+  swift: 'swift',
+  csharp: 'csharp',
+  'c#': 'csharp',
+  cpp: 'cpp',
+  'c++': 'cpp',
+  c: 'c',
+  php: 'php',
+  ruby: 'ruby',
+  rb: 'ruby',
+  perl: 'perl',
+  lua: 'lua',
+  nginx: 'nginx',
+  diff: 'diff',
+  plaintext: 'plaintext',
+  text: 'plaintext',
+  txt: 'plaintext'
+};
+const CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS: Record<string, HighlightLanguageLoader> = {
+  bash: () => import('highlight.js/lib/languages/bash'),
+  powershell: () => import('highlight.js/lib/languages/powershell'),
+  python: () => import('highlight.js/lib/languages/python'),
+  sql: () => import('highlight.js/lib/languages/sql'),
+  javascript: () => import('highlight.js/lib/languages/javascript'),
+  typescript: () => import('highlight.js/lib/languages/typescript'),
+  json: () => import('highlight.js/lib/languages/json'),
+  yaml: () => import('highlight.js/lib/languages/yaml'),
+  ini: () => import('highlight.js/lib/languages/ini'),
+  xml: () => import('highlight.js/lib/languages/xml'),
+  css: () => import('highlight.js/lib/languages/css'),
+  scss: () => import('highlight.js/lib/languages/scss'),
+  less: () => import('highlight.js/lib/languages/less'),
+  markdown: () => import('highlight.js/lib/languages/markdown'),
+  rust: () => import('highlight.js/lib/languages/rust'),
+  go: () => import('highlight.js/lib/languages/go'),
+  java: () => import('highlight.js/lib/languages/java'),
+  kotlin: () => import('highlight.js/lib/languages/kotlin'),
+  swift: () => import('highlight.js/lib/languages/swift'),
+  c: () => import('highlight.js/lib/languages/c'),
+  cpp: () => import('highlight.js/lib/languages/cpp'),
+  csharp: () => import('highlight.js/lib/languages/csharp'),
+  php: () => import('highlight.js/lib/languages/php'),
+  ruby: () => import('highlight.js/lib/languages/ruby'),
+  perl: () => import('highlight.js/lib/languages/perl'),
+  lua: () => import('highlight.js/lib/languages/lua'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  dockerfile: () => import('highlight.js/lib/languages/dockerfile'),
+  diff: () => import('highlight.js/lib/languages/diff'),
+  plaintext: () => import('highlight.js/lib/languages/plaintext')
+};
+const INLINE_SELECTION_COMMAND_IDS = new Set<EditorCommandId>([
+  EDITOR_COMMAND_IDS.inlineStrong,
+  EDITOR_COMMAND_IDS.inlineEmphasis,
+  EDITOR_COMMAND_IDS.inlineStrike,
+  EDITOR_COMMAND_IDS.inlineCode,
+  EDITOR_COMMAND_IDS.inlineHighlight,
+  EDITOR_COMMAND_IDS.inlineSuperscript,
+  EDITOR_COMMAND_IDS.inlineSubscript,
+  EDITOR_COMMAND_IDS.inlineKbd
+]);
+const TABLE_CONTEXT_COMMAND_IDS = new Set<EditorCommandId>([
+  EDITOR_COMMAND_IDS.tableRowAbove,
+  EDITOR_COMMAND_IDS.tableRowBelow,
+  EDITOR_COMMAND_IDS.tableColLeft,
+  EDITOR_COMMAND_IDS.tableColRight,
+  EDITOR_COMMAND_IDS.tableRowUp,
+  EDITOR_COMMAND_IDS.tableRowDown,
+  EDITOR_COMMAND_IDS.tableColMoveLeft,
+  EDITOR_COMMAND_IDS.tableColMoveRight,
+  EDITOR_COMMAND_IDS.tableDeleteRow,
+  EDITOR_COMMAND_IDS.tableDeleteCol,
+  EDITOR_COMMAND_IDS.tableDelete
+]);
 
 const shell = document.createElement('main');
 shell.className = 'shell';
@@ -515,9 +733,101 @@ content.spellcheck = false;
 const editorSurfaceStack = document.createElement('div');
 editorSurfaceStack.className = 'editor-surface-stack';
 
+const sourceEditorShell = document.createElement('div');
+sourceEditorShell.className = 'source-editor-shell';
+
+const sourceTextarea = document.createElement('textarea');
+sourceTextarea.className = 'source-editor';
+sourceTextarea.spellcheck = false;
+sourceTextarea.setAttribute('aria-label', 'Markdown source editor');
+sourceEditorShell.append(sourceTextarea);
+
+const findReplaceBar = document.createElement('section');
+findReplaceBar.className = 'find-replace-bar is-hidden';
+findReplaceBar.setAttribute('aria-label', 'Find and replace');
+
+const findQueryInput = document.createElement('input');
+findQueryInput.className = 'find-replace-input find-replace-query';
+findQueryInput.type = 'text';
+findQueryInput.spellcheck = false;
+findQueryInput.placeholder = '\u67e5\u627e';
+
+const findReplaceInput = document.createElement('input');
+findReplaceInput.className = 'find-replace-input find-replace-replace';
+findReplaceInput.type = 'text';
+findReplaceInput.spellcheck = false;
+findReplaceInput.placeholder = '\u66ff\u6362';
+
+const findReplaceCount = document.createElement('span');
+findReplaceCount.className = 'find-replace-count';
+
+const findPrevButton = document.createElement('button');
+findPrevButton.type = 'button';
+findPrevButton.className = 'find-replace-button';
+findPrevButton.textContent = '\u4e0a\u4e00\u4e2a';
+
+const findNextButton = document.createElement('button');
+findNextButton.type = 'button';
+findNextButton.className = 'find-replace-button';
+findNextButton.textContent = '\u4e0b\u4e00\u4e2a';
+
+const replaceCurrentButton = document.createElement('button');
+replaceCurrentButton.type = 'button';
+replaceCurrentButton.className = 'find-replace-button';
+replaceCurrentButton.textContent = '\u66ff\u6362';
+
+const replaceAllButton = document.createElement('button');
+replaceAllButton.type = 'button';
+replaceAllButton.className = 'find-replace-button';
+replaceAllButton.textContent = '\u5168\u90e8\u66ff\u6362';
+
+const findCloseButton = document.createElement('button');
+findCloseButton.type = 'button';
+findCloseButton.className = 'find-replace-button find-replace-close';
+findCloseButton.textContent = '\u5173\u95ed';
+
+findReplaceBar.append(
+  findQueryInput,
+  findReplaceInput,
+  findReplaceCount,
+  findPrevButton,
+  findNextButton,
+  replaceCurrentButton,
+  replaceAllButton,
+  findCloseButton
+);
+
 const statusBar = document.createElement('footer');
 statusBar.className = 'status-bar';
 statusBar.setAttribute('aria-label', 'Status bar');
+
+const statusBarLeft = document.createElement('div');
+statusBarLeft.className = 'status-bar-section status-bar-section-left';
+
+const sidebarToggleButton = document.createElement('button');
+sidebarToggleButton.type = 'button';
+sidebarToggleButton.className = 'status-bar-button';
+sidebarToggleButton.setAttribute('aria-label', 'Toggle sidebar');
+
+const sourceModeButton = document.createElement('button');
+sourceModeButton.type = 'button';
+sourceModeButton.className = 'status-bar-button status-bar-button-source';
+sourceModeButton.setAttribute('aria-label', 'Toggle source mode');
+sourceModeButton.textContent = '</>';
+
+statusBarLeft.append(sidebarToggleButton, sourceModeButton);
+
+const statusBarRight = document.createElement('div');
+statusBarRight.className = 'status-bar-section status-bar-section-right';
+
+const lineCountLabel = document.createElement('span');
+lineCountLabel.className = 'status-bar-metric';
+
+const charCountLabel = document.createElement('span');
+charCountLabel.className = 'status-bar-metric';
+
+statusBarRight.append(lineCountLabel, charCountLabel);
+statusBar.append(statusBarLeft, statusBarRight);
 
 const renameOverlay = document.createElement('div');
 renameOverlay.className = 'modal-overlay is-hidden';
@@ -564,12 +874,16 @@ renameDialog.append(
 renameOverlay.append(renameDialog);
 
 header.append(fileName, fileHint);
-editorPanel.append(header, content, statusBar);
+editorPanel.append(header, findReplaceBar, content, statusBar);
 frame.append(sidebar, workspaceResizeHandle, editorPanel);
 shell.append(frame, renameOverlay);
 app.replaceChildren(shell);
 
 applySidebarWidth(sidebarWidth);
+applySidebarCollapsedState();
+renderFindReplaceBar();
+renderStatusBar();
+scheduleNativeMenuStateSync();
 window.requestAnimationFrame(() => {
   clampSidebarWidthToWorkspace();
 });
@@ -579,16 +893,7 @@ renameDialogCancel.addEventListener('click', () => {
 });
 
 renameDialogConfirm.addEventListener('click', () => {
-  const normalized = normalizeMarkdownFileName(renameDialogInput.value);
-
-  if (!normalized.ok) {
-    renameDialogError.textContent = normalized.error;
-    renameDialogInput.focus();
-    renameDialogInput.select();
-    return;
-  }
-
-  closeRenameDialog(normalized.value);
+  void submitRenameDialog();
 });
 
 renameOverlay.addEventListener('click', (event) => {
@@ -600,7 +905,7 @@ renameOverlay.addEventListener('click', (event) => {
 renameDialogInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
-    renameDialogConfirm.click();
+    void submitRenameDialog();
     return;
   }
 
@@ -610,6 +915,108 @@ renameDialogInput.addEventListener('keydown', (event) => {
   }
 });
 
+sidebarToggleButton.addEventListener('click', () => {
+  if (editorViewMode === 'source') {
+    return;
+  }
+
+  setSidebarCollapsed(!isSidebarCollapsed);
+});
+
+sourceModeButton.addEventListener('click', () => {
+  toggleSourceMode();
+});
+
+sourceTextarea.addEventListener('input', () => {
+  if (editorViewMode !== 'source') {
+    return;
+  }
+
+  const activeDocument = getActiveDocument();
+
+  if (!activeDocument) {
+    renderStatusBar();
+    return;
+  }
+
+  recordSourceInputHistory(activeDocument, sourceTextarea.value);
+  updateDocumentContent(activeDocument, sourceTextarea.value);
+  rememberSourceEditorContext(activeDocument);
+});
+
+sourceTextarea.addEventListener('select', () => {
+  const activeDocument = getActiveDocument();
+
+  if (activeDocument && editorViewMode === 'source') {
+    rememberSourceEditorContext(activeDocument);
+  }
+});
+
+sourceTextarea.addEventListener('scroll', () => {
+  const activeDocument = getActiveDocument();
+
+  if (activeDocument && editorViewMode === 'source') {
+    rememberSourceEditorContext(activeDocument);
+  }
+});
+
+findQueryInput.addEventListener('input', () => {
+  recomputeFindReplaceMatches();
+  renderFindReplaceBar();
+});
+
+findQueryInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (event.shiftKey) {
+      navigateFindReplaceMatch(-1);
+    } else {
+      navigateFindReplaceMatch(1);
+    }
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeFindReplaceBar();
+  }
+});
+
+findReplaceInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void replaceCurrentFindMatch();
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeFindReplaceBar();
+  }
+});
+
+findPrevButton.addEventListener('click', () => {
+  navigateFindReplaceMatch(-1);
+});
+
+findNextButton.addEventListener('click', () => {
+  navigateFindReplaceMatch(1);
+});
+
+replaceCurrentButton.addEventListener('click', () => {
+  void replaceCurrentFindMatch();
+});
+
+replaceAllButton.addEventListener('click', () => {
+  void replaceAllFindMatches();
+});
+
+findCloseButton.addEventListener('click', () => {
+  closeFindReplaceBar();
+});
+
+window.addEventListener('keydown', handleGlobalFileShortcut, true);
+window.addEventListener('keydown', handleGlobalEditShortcut, true);
 window.addEventListener('keydown', handleGlobalEditorShortcut, true);
 
 workspaceResizeHandle.addEventListener('pointerdown', (event) => {
@@ -688,6 +1095,807 @@ function nextListOrder(): number {
 
 function getActiveDocument(): DocumentState | undefined {
   return documents.find((document) => document.id === activeDocumentId);
+}
+
+function getCurrentEditorText(): string | null {
+  const activeDocument = getActiveDocument();
+
+  if (!activeDocument) {
+    return null;
+  }
+
+  if (editorViewMode === 'source') {
+    return sourceTextarea.value;
+  }
+
+  return activeDocument.content;
+}
+
+function countEditorLines(text: string | null): number {
+  if (text === null) {
+    return 0;
+  }
+
+  const normalized = text.replace(/\r/g, '');
+  return normalized.length === 0 ? 1 : normalized.split('\n').length;
+}
+
+function countEditorCharacters(text: string | null): number {
+  if (text === null) {
+    return 0;
+  }
+
+  return text.replace(/\r/g, '').length;
+}
+
+function restoreSourceEditorContext(document: DocumentState): void {
+  sourceTextarea.selectionStart = Math.min(document.sourceSelectionStart, sourceTextarea.value.length);
+  sourceTextarea.selectionEnd = Math.min(document.sourceSelectionEnd, sourceTextarea.value.length);
+  sourceTextarea.scrollTop = document.sourceScrollTop;
+}
+
+function rememberMilkdownSelection(
+  document: DocumentState,
+  selection: EditorView['state']['selection']
+): void {
+  document.editorSelectionFrom = selection.from;
+  document.editorSelectionTo = selection.to;
+}
+
+function clampEditorSelectionPosition(docSize: number, position: number): number {
+  return Math.max(0, Math.min(position, docSize));
+}
+
+function restoreMilkdownSelection(view: EditorView, document: DocumentState): void {
+  const docSize = view.state.doc.content.size;
+  const from = clampEditorSelectionPosition(docSize, document.editorSelectionFrom);
+  const to = clampEditorSelectionPosition(docSize, document.editorSelectionTo);
+
+  let nextSelection: EditorView['state']['selection'];
+
+  try {
+    nextSelection =
+      from === to
+        ? TextSelection.near(view.state.doc.resolve(from))
+        : TextSelection.create(view.state.doc, from, to);
+  } catch {
+    nextSelection = TextSelection.near(view.state.doc.resolve(clampEditorSelectionPosition(docSize, to)));
+  }
+
+  if (!nextSelection.eq(view.state.selection)) {
+    view.dispatch(view.state.tr.setSelection(nextSelection));
+  }
+}
+
+function getSourceHistoryForDocument(document: DocumentState | null): SourceHistoryState | null {
+  if (!document) {
+    return null;
+  }
+
+  return getSourceHistoryState(document.id, document.content);
+}
+
+function readCurrentEditorCommandContext(): EditorCommandContext {
+  const activeDocument = getActiveDocument();
+
+  if (!activeDocument) {
+    return {
+      activeDocument: null,
+      isRenderedReady: false,
+      hasSelection: false,
+      isInHeading: false,
+      isInTable: false,
+      canUndo: false,
+      canRedo: false
+    };
+  }
+
+  if (editorViewMode !== 'rendered') {
+    const sourceHistoryState = getSourceHistoryForDocument(activeDocument);
+
+    return {
+      activeDocument,
+      isRenderedReady: false,
+      hasSelection: false,
+      isInHeading: false,
+      isInTable: false,
+      canUndo: Boolean(sourceHistoryState && sourceHistoryState.undoStack.length > 0),
+      canRedo: Boolean(sourceHistoryState && sourceHistoryState.redoStack.length > 0)
+    };
+  }
+
+  const session = getActiveMilkdownSession();
+
+  if (!session || milkdownDocumentId !== activeDocument.id) {
+    return {
+      activeDocument,
+      isRenderedReady: false,
+      hasSelection: false,
+      isInHeading: false,
+      isInTable: false,
+      canUndo: false,
+      canRedo: false
+    };
+  }
+
+  try {
+    return session.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const { selection } = view.state;
+
+      rememberMilkdownSelection(activeDocument, selection);
+
+      return {
+        activeDocument,
+        isRenderedReady: true,
+        hasSelection: !selection.empty,
+        isInHeading: selection.$from.parent.type.name === 'heading',
+        isInTable: isInTable(view.state),
+        canUndo: undoDepth(view.state) > 0,
+        canRedo: redoDepth(view.state) > 0
+      };
+    });
+  } catch {
+    return {
+      activeDocument,
+      isRenderedReady: false,
+      hasSelection: false,
+      isInHeading: false,
+      isInTable: false,
+      canUndo: false,
+      canRedo: false
+    };
+  }
+}
+
+function isEditorCommandCurrentlyEnabled(
+  commandId: EditorCommandId,
+  context: EditorCommandContext = readCurrentEditorCommandContext()
+): boolean {
+  if (!context.activeDocument || !context.isRenderedReady) {
+    return false;
+  }
+
+  if (INLINE_SELECTION_COMMAND_IDS.has(commandId)) {
+    return context.hasSelection;
+  }
+
+  if (
+    commandId === EDITOR_COMMAND_IDS.headingPromote ||
+    commandId === EDITOR_COMMAND_IDS.headingDemote
+  ) {
+    return context.isInHeading;
+  }
+
+  if (TABLE_CONTEXT_COMMAND_IDS.has(commandId)) {
+    return context.isInTable;
+  }
+
+  return true;
+}
+
+function getNativeMenuEnabledStates(): MenuEnabledState[] {
+  const context = readCurrentEditorCommandContext();
+  const hasActiveDocument = Boolean(context.activeDocument);
+
+  const states: MenuEnabledState[] = [
+    { id: MENU_EDIT_UNDO_ID, enabled: context.canUndo },
+    { id: MENU_EDIT_REDO_ID, enabled: context.canRedo },
+    { id: MENU_EDIT_FIND_ID, enabled: hasActiveDocument },
+    { id: MENU_EDIT_REPLACE_ID, enabled: hasActiveDocument }
+  ];
+
+  for (const commandId of Object.values(EDITOR_COMMAND_IDS)) {
+    states.push({
+      id: `${EDITOR_COMMAND_MENU_PREFIX}${commandId}`,
+      enabled: isEditorCommandCurrentlyEnabled(commandId, context)
+    });
+  }
+
+  return states;
+}
+
+function scheduleNativeMenuStateSync(): void {
+  if (menuStateSyncTimer !== null) {
+    window.clearTimeout(menuStateSyncTimer);
+  }
+
+  menuStateSyncTimer = window.setTimeout(() => {
+    menuStateSyncTimer = null;
+    const states = getNativeMenuEnabledStates();
+
+    void invoke('update_menu_enabled_states', { states }).catch(() => {
+      // The app can keep working even if native menu state sync fails.
+    });
+  }, NATIVE_MENU_STATE_SYNC_DELAY_MS);
+}
+
+function getSourceHistoryState(documentId: string, initialContent: string): SourceHistoryState {
+  let state = sourceHistoryByDocument.get(documentId);
+
+  if (!state) {
+    state = {
+      snapshot: initialContent,
+      undoStack: [],
+      redoStack: []
+    };
+    sourceHistoryByDocument.set(documentId, state);
+  }
+
+  return state;
+}
+
+function setSourceHistorySnapshot(
+  documentId: string,
+  content: string,
+  options: { resetStacks?: boolean } = {}
+): void {
+  const state = getSourceHistoryState(documentId, content);
+  state.snapshot = content;
+
+  if (options.resetStacks) {
+    state.undoStack = [];
+    state.redoStack = [];
+  }
+}
+
+function pushSourceUndoSnapshot(state: SourceHistoryState, content: string): void {
+  state.undoStack.push(content);
+
+  if (state.undoStack.length > SOURCE_HISTORY_LIMIT) {
+    state.undoStack.shift();
+  }
+}
+
+function pushSourceRedoSnapshot(state: SourceHistoryState, content: string): void {
+  state.redoStack.push(content);
+
+  if (state.redoStack.length > SOURCE_HISTORY_LIMIT) {
+    state.redoStack.shift();
+  }
+}
+
+function rememberSourceEditorContext(document: DocumentState): void {
+  document.sourceSelectionStart = sourceTextarea.selectionStart;
+  document.sourceSelectionEnd = sourceTextarea.selectionEnd;
+  document.sourceScrollTop = sourceTextarea.scrollTop;
+}
+
+function applySourceDocumentChange(
+  nextContent: string,
+  options: {
+    recordUndo?: boolean;
+    selectionStart?: number;
+    selectionEnd?: number;
+    scrollTop?: number;
+  } = {}
+): boolean {
+  const activeDocument = getActiveDocument();
+
+  if (!activeDocument || editorViewMode !== 'source') {
+    return false;
+  }
+
+  const state = getSourceHistoryState(activeDocument.id, activeDocument.content);
+  const previousSelectionStart = sourceTextarea.selectionStart;
+  const previousSelectionEnd = sourceTextarea.selectionEnd;
+  const previousScrollTop = sourceTextarea.scrollTop;
+
+  if (options.recordUndo && state.snapshot !== nextContent) {
+    pushSourceUndoSnapshot(state, state.snapshot);
+    state.redoStack = [];
+  }
+
+  sourceTextarea.value = nextContent;
+  state.snapshot = nextContent;
+  sourceTextarea.selectionStart = Math.min(
+    options.selectionStart ?? previousSelectionStart,
+    sourceTextarea.value.length
+  );
+  sourceTextarea.selectionEnd = Math.min(
+    options.selectionEnd ?? previousSelectionEnd,
+    sourceTextarea.value.length
+  );
+  sourceTextarea.scrollTop = options.scrollTop ?? previousScrollTop;
+  syncSourceEditorDocumentState(activeDocument);
+  rememberSourceEditorContext(activeDocument);
+  renderDocumentHeader();
+  sourceTextarea.focus();
+  return true;
+}
+
+function recordSourceInputHistory(document: DocumentState, nextContent: string): void {
+  const state = getSourceHistoryState(document.id, document.content);
+
+  if (state.snapshot === nextContent) {
+    return;
+  }
+
+  pushSourceUndoSnapshot(state, state.snapshot);
+  state.redoStack = [];
+  state.snapshot = nextContent;
+}
+
+function renderStatusBar(): void {
+  const activeDocument = getActiveDocument();
+  const currentText = getCurrentEditorText();
+  const isSourceMode = editorViewMode === 'source';
+
+  sidebarToggleButton.textContent = isSidebarCollapsed ? '\u203a' : '\u2039';
+  sidebarToggleButton.title = isSidebarCollapsed ? '\u5c55\u5f00\u4fa7\u680f' : '\u6536\u8d77\u4fa7\u680f';
+  sidebarToggleButton.disabled = isSourceMode;
+  sidebarToggleButton.classList.toggle('is-active', !isSidebarCollapsed && !isSourceMode);
+  sidebarToggleButton.classList.toggle('is-collapsed', isSidebarCollapsed);
+
+  sourceModeButton.title = isSourceMode ? '\u8fd4\u56de\u6e32\u67d3\u89c6\u56fe' : '\u663e\u793a\u6e90\u7801';
+  sourceModeButton.disabled = !activeDocument;
+  sourceModeButton.classList.toggle('is-active', isSourceMode);
+
+  lineCountLabel.textContent = `${countEditorLines(currentText)} \u884c`;
+  charCountLabel.textContent = `${countEditorCharacters(currentText)} \u5b57\u7b26`;
+}
+
+function applySidebarCollapsedState(): void {
+  frame.classList.toggle('is-sidebar-collapsed', isSidebarCollapsed);
+  sidebar.setAttribute('aria-hidden', String(isSidebarCollapsed));
+  sidebar.inert = isSidebarCollapsed;
+  workspaceResizeHandle.setAttribute('aria-hidden', String(isSidebarCollapsed));
+  workspaceResizeHandle.inert = isSidebarCollapsed;
+  renderStatusBar();
+}
+
+function setSidebarCollapsed(collapsed: boolean): void {
+  if (isSidebarCollapsed === collapsed) {
+    applySidebarCollapsedState();
+    return;
+  }
+
+  isSidebarCollapsed = collapsed;
+  applySidebarCollapsedState();
+}
+
+function syncSourceEditorDocumentState(document: DocumentState): void {
+  const nextContent = sourceTextarea.value;
+
+  rememberSourceEditorContext(document);
+  updateDocumentContent(document, nextContent);
+  document.sourceSnapshot = createMarkdownSourceSnapshot(nextContent);
+  document.headingStyles = [];
+}
+
+function setEditorViewMode(nextMode: EditorViewMode): void {
+  if (editorViewMode === nextMode) {
+    renderStatusBar();
+    return;
+  }
+
+  const activeDocument = getActiveDocument();
+
+  if (nextMode === 'source') {
+    syncActiveDocumentFromEditor();
+    sidebarCollapsedBeforeSourceMode = isSidebarCollapsed;
+    setSidebarCollapsed(true);
+
+    if (activeDocument) {
+      sourceTextarea.value = activeDocument.content;
+      setSourceHistorySnapshot(activeDocument.id, activeDocument.content, { resetStacks: false });
+      restoreSourceEditorContext(activeDocument);
+    } else {
+      sourceTextarea.value = '';
+    }
+  } else {
+    if (editorViewMode === 'source' && activeDocument) {
+      syncSourceEditorDocumentState(activeDocument);
+    }
+
+    setSidebarCollapsed(sidebarCollapsedBeforeSourceMode);
+  }
+
+  editorViewMode = nextMode;
+  requestRender({ editor: true });
+  requestSidebarRefreshForCurrentMode();
+  if (findReplaceOpen) {
+    recomputeFindReplaceMatches();
+    renderFindReplaceBar();
+  }
+  renderStatusBar();
+}
+
+function toggleSourceMode(): void {
+  if (!getActiveDocument()) {
+    return;
+  }
+
+  setEditorViewMode(editorViewMode === 'source' ? 'rendered' : 'source');
+}
+
+function waitForNativeMenuToClose(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
+}
+
+function focusActiveCommandContext(): void {
+  const activeDocument = getActiveDocument();
+
+  if (editorViewMode === 'source') {
+    if (activeDocument) {
+      restoreSourceEditorContext(activeDocument);
+    }
+
+    sourceTextarea.focus();
+    return;
+  }
+
+  const session = getActiveMilkdownSession();
+
+  if (session && activeDocument && milkdownDocumentId === activeDocument.id) {
+    try {
+      session.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        restoreMilkdownSelection(view, activeDocument);
+        view.focus();
+      });
+    } catch {
+      focusMilkdownSession(session);
+    }
+  }
+}
+
+function getSelectedSearchText(): string {
+  if (editorViewMode === 'source') {
+    const { selectionStart, selectionEnd, value } = sourceTextarea;
+    return selectionEnd > selectionStart ? value.slice(selectionStart, selectionEnd) : '';
+  }
+
+  const session = getActiveMilkdownSession();
+
+  if (!session || !milkdownEditor) {
+    return '';
+  }
+
+  try {
+    return milkdownEditor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const { selection } = view.state;
+
+      if (selection.empty) {
+        return '';
+      }
+
+      return view.state.doc.textBetween(selection.from, selection.to, '\n', '\n');
+    });
+  } catch {
+    return '';
+  }
+}
+
+function buildRenderedTextSegments(view: EditorView): RenderedTextSegment[] {
+  const segments: RenderedTextSegment[] = [];
+
+  view.state.doc.descendants((node, position) => {
+    if (!node.isTextblock) {
+      return true;
+    }
+
+    const boundaries = [position + 1];
+    let text = '';
+
+    node.forEach((child, offset) => {
+      const childPos = position + 1 + offset;
+
+      if (child.isText && child.text) {
+        text += child.text;
+
+        for (let index = 0; index < child.text.length; index += 1) {
+          boundaries.push(childPos + index + 1);
+        }
+
+        return;
+      }
+
+      if (child.type.name === 'hardbreak') {
+        text += '\n';
+        boundaries.push(childPos + 1);
+      }
+    });
+
+    if (text.length > 0) {
+      segments.push({ text, boundaries });
+    }
+
+    return true;
+  });
+
+  return segments;
+}
+
+function findAllTextMatches(text: string, query: string): Array<{ start: number; end: number }> {
+  if (query.length === 0) {
+    return [];
+  }
+
+  const matches: Array<{ start: number; end: number }> = [];
+  let searchFrom = 0;
+
+  while (searchFrom <= text.length) {
+    const index = text.indexOf(query, searchFrom);
+
+    if (index < 0) {
+      break;
+    }
+
+    matches.push({
+      start: index,
+      end: index + query.length
+    });
+    searchFrom = index + Math.max(1, query.length);
+  }
+
+  return matches;
+}
+
+function getRenderedFindMatches(query: string): FindMatch[] {
+  const session = getActiveMilkdownSession();
+
+  if (!session || !milkdownEditor || !getActiveDocument()) {
+    return [];
+  }
+
+  try {
+    return milkdownEditor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const segments = buildRenderedTextSegments(view);
+      const matches: FindMatch[] = [];
+
+      for (const segment of segments) {
+        for (const match of findAllTextMatches(segment.text, query)) {
+          matches.push({
+            kind: 'rendered',
+            from: segment.boundaries[match.start] ?? 0,
+            to: segment.boundaries[match.end] ?? 0
+          });
+        }
+      }
+
+      return matches.filter((match) => match.kind !== 'rendered' || match.to > match.from);
+    });
+  } catch {
+    return [];
+  }
+}
+
+function getSourceFindMatches(query: string): FindMatch[] {
+  return findAllTextMatches(sourceTextarea.value, query).map((match) => ({
+    kind: 'source',
+    start: match.start,
+    end: match.end
+  }));
+}
+
+function getActiveFindMatch(): FindMatch | null {
+  return findReplaceMatches[findReplaceActiveIndex] ?? null;
+}
+
+function revealFindMatch(match: FindMatch, focusEditor = false): void {
+  if (match.kind === 'source') {
+    sourceTextarea.setSelectionRange(match.start, match.end);
+
+    if (focusEditor) {
+      sourceTextarea.focus();
+    }
+
+    return;
+  }
+
+  const session = getActiveMilkdownSession();
+
+  if (!session || !milkdownEditor) {
+    return;
+  }
+
+  try {
+    milkdownEditor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const selection = TextSelection.create(view.state.doc, match.from, match.to);
+      const tr = view.state.tr.setSelection(selection).scrollIntoView();
+
+      view.dispatch(tr);
+
+      if (focusEditor) {
+        view.focus();
+      }
+    });
+  } catch {
+    // Ignore failed reveal attempts during document/view transitions.
+  }
+}
+
+function recomputeFindReplaceMatches(): void {
+  if (!findReplaceOpen) {
+    findReplaceMatches = [];
+    findReplaceActiveIndex = -1;
+    return;
+  }
+
+  const query = findQueryInput.value;
+
+  if (!query) {
+    findReplaceMatches = [];
+    findReplaceActiveIndex = -1;
+    return;
+  }
+
+  findReplaceMatches = editorViewMode === 'source' ? getSourceFindMatches(query) : getRenderedFindMatches(query);
+  findReplaceActiveIndex = findReplaceMatches.length > 0 ? 0 : -1;
+}
+
+function renderFindReplaceBar(): void {
+  const showReplace = findReplaceMode === 'replace';
+  const activeCount = findReplaceActiveIndex >= 0 ? findReplaceActiveIndex + 1 : 0;
+  const totalCount = findReplaceMatches.length;
+  const hasMatches = totalCount > 0;
+  const hasQuery = findQueryInput.value.length > 0;
+
+  findReplaceBar.classList.toggle('is-hidden', !findReplaceOpen);
+  findReplaceInput.hidden = !showReplace;
+  replaceCurrentButton.hidden = !showReplace;
+  replaceAllButton.hidden = !showReplace;
+  findReplaceCount.textContent = `${activeCount} / ${totalCount}`;
+  findPrevButton.disabled = !hasMatches;
+  findNextButton.disabled = !hasMatches;
+  replaceCurrentButton.disabled = !showReplace || !hasMatches;
+  replaceAllButton.disabled = !showReplace || !hasQuery;
+}
+
+function openFindReplaceBar(mode: FindReplaceMode): void {
+  syncActiveDocumentFromEditor();
+
+  if (!getActiveDocument()) {
+    return;
+  }
+
+  findReplaceOpen = true;
+  findReplaceMode = mode;
+
+  if (!findQueryInput.value) {
+    const selectionText = getSelectedSearchText().trim();
+
+    if (selectionText) {
+      findQueryInput.value = selectionText;
+    }
+  }
+
+  recomputeFindReplaceMatches();
+  renderFindReplaceBar();
+  findQueryInput.focus();
+  findQueryInput.select();
+}
+
+function closeFindReplaceBar(): void {
+  findReplaceOpen = false;
+  findReplaceMatches = [];
+  findReplaceActiveIndex = -1;
+  renderFindReplaceBar();
+}
+
+function navigateFindReplaceMatch(direction: -1 | 1): void {
+  recomputeFindReplaceMatches();
+
+  if (findReplaceMatches.length === 0) {
+    renderFindReplaceBar();
+    return;
+  }
+
+  if (findReplaceActiveIndex < 0) {
+    findReplaceActiveIndex = direction > 0 ? 0 : findReplaceMatches.length - 1;
+  } else {
+    findReplaceActiveIndex =
+      (findReplaceActiveIndex + direction + findReplaceMatches.length) % findReplaceMatches.length;
+  }
+
+  revealFindMatch(findReplaceMatches[findReplaceActiveIndex]!, true);
+  renderFindReplaceBar();
+}
+
+function replaceCurrentSourceMatch(match: Extract<FindMatch, { kind: 'source' }>, replacement: string): void {
+  const nextContent =
+    sourceTextarea.value.slice(0, match.start) +
+    replacement +
+    sourceTextarea.value.slice(match.end);
+  applySourceDocumentChange(nextContent, { recordUndo: true });
+}
+
+function replaceCurrentRenderedMatch(match: Extract<FindMatch, { kind: 'rendered' }>, replacement: string): boolean {
+  return executeEditorCommandWithActiveSession((_ctx, view) => {
+    const tr = view.state.tr.insertText(replacement, match.from, match.to).scrollIntoView();
+
+    if (!tr.docChanged) {
+      return false;
+    }
+
+    view.dispatch(tr);
+    return true;
+  });
+}
+
+async function replaceCurrentFindMatch(): Promise<void> {
+  const activeMatch = getActiveFindMatch();
+
+  if (!activeMatch) {
+    return;
+  }
+
+  const replacement = findReplaceInput.value;
+
+  if (activeMatch.kind === 'source') {
+    replaceCurrentSourceMatch(activeMatch, replacement);
+  } else if (!replaceCurrentRenderedMatch(activeMatch, replacement)) {
+    return;
+  }
+
+  recomputeFindReplaceMatches();
+  renderFindReplaceBar();
+
+  if (findReplaceMatches.length > 0) {
+    findReplaceActiveIndex = Math.min(findReplaceActiveIndex, findReplaceMatches.length - 1);
+    revealFindMatch(findReplaceMatches[findReplaceActiveIndex]!, true);
+  }
+}
+
+function replaceAllSourceMatches(query: string, replacement: string): void {
+  const nextContent = sourceTextarea.value.split(query).join(replacement);
+  applySourceDocumentChange(nextContent, { recordUndo: true });
+}
+
+function replaceAllRenderedMatches(matches: Extract<FindMatch, { kind: 'rendered' }>[], replacement: string): boolean {
+  return executeEditorCommandWithActiveSession((_ctx, view) => {
+    const sortedMatches = [...matches].sort((left, right) => right.from - left.from);
+    const tr = view.state.tr;
+
+    for (const match of sortedMatches) {
+      tr.insertText(replacement, match.from, match.to);
+    }
+
+    if (!tr.docChanged) {
+      return false;
+    }
+
+    tr.scrollIntoView();
+    view.dispatch(tr);
+    return true;
+  });
+}
+
+async function replaceAllFindMatches(): Promise<void> {
+  const query = findQueryInput.value;
+
+  if (!query) {
+    return;
+  }
+
+  const replacement = findReplaceInput.value;
+  recomputeFindReplaceMatches();
+
+  if (findReplaceMatches.length === 0) {
+    renderFindReplaceBar();
+    return;
+  }
+
+  if (editorViewMode === 'source') {
+    replaceAllSourceMatches(query, replacement);
+  } else {
+    const renderedMatches = findReplaceMatches.filter(
+      (match): match is Extract<FindMatch, { kind: 'rendered' }> => match.kind === 'rendered'
+    );
+
+    if (!replaceAllRenderedMatches(renderedMatches, replacement)) {
+      return;
+    }
+  }
+
+  recomputeFindReplaceMatches();
+  renderFindReplaceBar();
 }
 
 function applySidebarWidth(nextWidth: number): void {
@@ -1647,6 +2855,12 @@ function touchDocument(document: DocumentState): void {
 function updateDocumentContent(document: DocumentState, nextContent: string): void {
   document.content = nextContent;
   document.isDirty = document.isUntitled || nextContent !== document.savedContent;
+  if (findReplaceOpen && document.id === activeDocumentId) {
+    recomputeFindReplaceMatches();
+    renderFindReplaceBar();
+  }
+  scheduleNativeMenuStateSync();
+  renderStatusBar();
 }
 
 function getMilkdownSession(documentId: string): MilkdownSession | undefined {
@@ -1812,6 +3026,17 @@ function persistMilkdownSessionState(session: MilkdownSession): void {
   session.scrollLeft = session.surface.scrollLeft;
 
   if (document) {
+    if (milkdownDocumentId === session.documentId) {
+      try {
+        session.editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          rememberMilkdownSelection(document, view.state.selection);
+        });
+      } catch {
+        // Ignore selection persistence failures when the session is being torn down.
+      }
+    }
+
     document.editorScrollTop = session.scrollTop;
     document.editorScrollLeft = session.scrollLeft;
   }
@@ -1910,8 +3135,16 @@ function markMilkdownSynchronized(documentId: string, markdown: string): void {
 function syncActiveDocumentFromEditor(): void {
   const activeDocument = getActiveDocument();
 
+  if (!activeDocument) {
+    return;
+  }
+
+  if (editorViewMode === 'source') {
+    syncSourceEditorDocumentState(activeDocument);
+    return;
+  }
+
   if (
-    activeDocument &&
     milkdownEditor &&
     milkdownDocumentId === activeDocument.id &&
     hasPendingMilkdownChanges(activeDocument.id)
@@ -2099,11 +3332,15 @@ function renderDocumentHeader(): void {
   if (headerNotice) {
     fileHint.textContent = headerNotice.text;
     fileHint.classList.toggle('is-error', headerNotice.isError);
+    scheduleNativeMenuStateSync();
+    renderStatusBar();
     return;
   }
 
   fileHint.textContent = getDefaultHint(activeDocument);
   fileHint.classList.remove('is-error');
+  scheduleNativeMenuStateSync();
+  renderStatusBar();
 }
 
 function splitFileNameLabel(name: string): { baseName: string; extension: string } {
@@ -2529,6 +3766,7 @@ function syncCurrentDirectoryFileEntry(
 
 async function closeDocument(documentId: string): Promise<void> {
   syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
 
   const document = documents.find((entry) => entry.id === documentId);
 
@@ -2553,6 +3791,7 @@ async function closeDocument(documentId: string): Promise<void> {
     removeRecentFile(document.filePath);
   }
 
+  sourceHistoryByDocument.delete(documentId);
   await destroyMilkdownSession(documentId);
   documents = documents.filter((entry) => entry.id !== documentId);
 
@@ -3619,10 +4858,8 @@ function applyHeadingBlockSelection(nextBlock: 'paragraph' | (1 | 2 | 3 | 4 | 5 
     const tr = view.state.tr.setNodeMarkup(markerState.pos, paragraphType, null).scrollIntoView();
     tr.setSelection(TextSelection.near(tr.doc.resolve(markerState.pos + 1)));
     view.dispatch(tr);
-    syncActiveDocumentFromEditor();
     renderHeadingMarkerOverlay(activeDocument.id);
     requestSidebarRefreshForCurrentMode();
-    renderDocumentHeader();
     view.focus();
     return;
   }
@@ -3653,12 +4890,11 @@ function applyHeadingBlockSelection(nextBlock: 'paragraph' | (1 | 2 | 3 | 4 | 5 
     view.dispatch(tr);
   } else if (styleChanged) {
     markMilkdownPendingChanges(activeDocument.id);
+    syncActiveDocumentFromEditor();
   }
 
-  syncActiveDocumentFromEditor();
   renderHeadingMarkerOverlay(activeDocument.id);
   requestSidebarRefreshForCurrentMode();
-  renderDocumentHeader();
   view.focus();
 }
 
@@ -3755,10 +4991,8 @@ function applyInlineFormatSelection(nextPreset: InlineFormatPreset): void {
 
   tr.scrollIntoView();
   view.dispatch(tr);
-  syncActiveDocumentFromEditor();
   renderHeadingMarkerOverlay(activeDocument.id);
   requestFilesSidebarRefresh();
-  renderDocumentHeader();
   view.focus();
 }
 
@@ -3788,9 +5022,7 @@ function executeEditorCommandWithActiveSession(
       return false;
     }
 
-    syncActiveDocumentFromEditor();
     requestSidebarRefreshForCurrentMode();
-    renderDocumentHeader();
     renderHeadingMarkerOverlay(activeDocument.id);
     view.focus();
     return true;
@@ -4027,13 +5259,28 @@ const editorCommandHandlers = new Map<EditorCommandId, EditorCommandHandler>([
 ]);
 
 function executeEditorCommand(commandId: string): boolean {
-  const handler = editorCommandHandlers.get(commandId as EditorCommandId);
+  const typedCommandId = commandId as EditorCommandId;
+  const unavailableMessage = getEditorCommandUnavailableMessage(typedCommandId);
 
-  if (!handler) {
+  if (unavailableMessage) {
+    showHeaderNotice(unavailableMessage, true);
     return false;
   }
 
-  return handler();
+  const handler = editorCommandHandlers.get(typedCommandId);
+
+  if (!handler) {
+    showHeaderNotice('\u8be5\u547d\u4ee4\u5f53\u524d\u672a\u5b9e\u73b0\u3002', true);
+    return false;
+  }
+
+  const executed = handler();
+
+  if (!executed) {
+    showHeaderNotice('\u5f53\u524d\u4e0a\u4e0b\u6587\u65e0\u6cd5\u6267\u884c\u8be5\u64cd\u4f5c\u3002', true);
+  }
+
+  return executed;
 }
 
 const editorShortcutDefinitions: ShortcutDefinition[] = [
@@ -4062,6 +5309,21 @@ const editorShortcutDefinitions: ShortcutDefinition[] = [
   { commandId: EDITOR_COMMAND_IDS.inlineCode, code: 'Backquote', ctrl: true, shift: true, alt: false }
 ];
 
+const fileShortcutDefinitions: FileShortcutDefinition[] = [
+  { command: { type: 'newFile' }, key: 'n', ctrl: true, shift: false, alt: false },
+  { command: { type: 'openFile' }, key: 'o', ctrl: true, shift: false, alt: false },
+  { command: { type: 'saveFile' }, key: 's', ctrl: true, shift: false, alt: false },
+  { command: { type: 'saveAsFile' }, key: 's', ctrl: true, shift: true, alt: false },
+  { command: { type: 'closeFile' }, key: 'w', ctrl: true, shift: false, alt: false }
+];
+
+const editShortcutDefinitions: EditShortcutDefinition[] = [
+  { commandId: 'undo', key: 'z', ctrl: true, shift: false, alt: false },
+  { commandId: 'redo', key: 'y', ctrl: true, shift: false, alt: false },
+  { commandId: 'find', key: 'f', ctrl: true, shift: false, alt: false },
+  { commandId: 'replace', key: 'h', ctrl: true, shift: false, alt: false }
+];
+
 function getShortcutEventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) {
     return target;
@@ -4074,7 +5336,7 @@ function getShortcutEventTargetElement(target: EventTarget | null): HTMLElement 
   return null;
 }
 
-function isBlockingEditorShortcutTarget(target: EventTarget | null): boolean {
+function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
   if (!renameOverlay.classList.contains('is-hidden')) {
     return true;
   }
@@ -4104,7 +5366,7 @@ function normalizeShortcutEventKey(event: KeyboardEvent): string {
   return event.key.length === 1 ? event.key.toLowerCase() : event.key;
 }
 
-function matchesShortcut(event: KeyboardEvent, definition: ShortcutDefinition): boolean {
+function matchesShortcut(event: KeyboardEvent, definition: ShortcutBinding): boolean {
   if (
     event.ctrlKey !== definition.ctrl ||
     event.shiftKey !== definition.shift ||
@@ -4125,8 +5387,28 @@ function matchesShortcut(event: KeyboardEvent, definition: ShortcutDefinition): 
   return normalizeShortcutEventKey(event) === definition.key;
 }
 
+function findMatchingFileShortcut(event: KeyboardEvent): FileShortcutDefinition | null {
+  for (const shortcut of fileShortcutDefinitions) {
+    if (matchesShortcut(event, shortcut)) {
+      return shortcut;
+    }
+  }
+
+  return null;
+}
+
 function findMatchingEditorShortcut(event: KeyboardEvent): ShortcutDefinition | null {
   for (const shortcut of editorShortcutDefinitions) {
+    if (matchesShortcut(event, shortcut)) {
+      return shortcut;
+    }
+  }
+
+  return null;
+}
+
+function findMatchingEditShortcut(event: KeyboardEvent): EditShortcutDefinition | null {
+  for (const shortcut of editShortcutDefinitions) {
     if (matchesShortcut(event, shortcut)) {
       return shortcut;
     }
@@ -4140,32 +5422,361 @@ function canHandleEditorShortcutEvent(event: KeyboardEvent): boolean {
     return false;
   }
 
+  if (editorViewMode !== 'rendered') {
+    return false;
+  }
+
   if (!getActiveDocument() || !getActiveMilkdownSession()) {
     return false;
   }
 
-  if (isBlockingEditorShortcutTarget(event.target)) {
+  if (isBlockingGlobalShortcutTarget(event.target)) {
     return false;
   }
 
   return true;
 }
 
-function markKeyboardEditorCommandInvocation(commandId: EditorCommandId): void {
-  lastKeyboardEditorCommandInvocation = {
-    commandId,
+function canHandleFileShortcutEvent(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || event.repeat || event.isComposing) {
+    return false;
+  }
+
+  if (isBlockingGlobalShortcutTarget(event.target)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isBlockingEditShortcutTarget(target: EventTarget | null): boolean {
+  if (!renameOverlay.classList.contains('is-hidden')) {
+    return true;
+  }
+
+  const element = getShortcutEventTargetElement(target);
+
+  if (!element) {
+    return false;
+  }
+
+  if (element === sourceTextarea || element.closest('.milkdown-host')) {
+    return false;
+  }
+
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+    return true;
+  }
+
+  if (element.isContentEditable) {
+    return true;
+  }
+
+  return false;
+}
+
+function canHandleEditShortcutEvent(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || event.repeat || event.isComposing) {
+    return false;
+  }
+
+  if (isBlockingEditShortcutTarget(event.target)) {
+    return false;
+  }
+
+  return true;
+}
+
+function getAppCommandDedupKey(command: Exclude<AppCommandPayload, { type: 'openRecentFile' }>): string {
+  if (command.type === 'editorCommand') {
+    return `editor:${command.commandId}`;
+  }
+
+  if (command.type === 'editCommand') {
+    return `edit:${command.commandId}`;
+  }
+
+  return `app:${command.type}`;
+}
+
+function markKeyboardCommandInvocation(command: Exclude<AppCommandPayload, { type: 'openRecentFile' }>): void {
+  lastKeyboardCommandInvocation = {
+    key: getAppCommandDedupKey(command),
     timestamp: performance.now()
   };
 }
 
-function shouldIgnoreMenuEditorCommand(commandId: string): boolean {
-  if (!lastKeyboardEditorCommandInvocation) {
+function shouldIgnoreNativeMenuCommand(command: AppCommandPayload, source: AppCommandSource): boolean {
+  if (source !== 'native-menu' || !lastKeyboardCommandInvocation || command.type === 'openRecentFile') {
     return false;
   }
 
   return (
-    lastKeyboardEditorCommandInvocation.commandId === commandId &&
-    performance.now() - lastKeyboardEditorCommandInvocation.timestamp <= EDITOR_COMMAND_DEDUP_WINDOW_MS
+    lastKeyboardCommandInvocation.key === getAppCommandDedupKey(command) &&
+    performance.now() - lastKeyboardCommandInvocation.timestamp <= EDITOR_COMMAND_DEDUP_WINDOW_MS
+  );
+}
+
+function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+
+  switch (candidate.type) {
+    case 'newFile':
+    case 'openFile':
+    case 'openFolder':
+    case 'saveFile':
+    case 'saveAsFile':
+    case 'renameFile':
+    case 'closeFile':
+    case 'clearRecentFiles':
+      return true;
+    case 'openRecentFile':
+      return typeof candidate.path === 'string' && candidate.path.length > 0;
+    case 'editCommand':
+      return (
+        (candidate.commandId === 'undo' ||
+          candidate.commandId === 'redo' ||
+          candidate.commandId === 'find' ||
+          candidate.commandId === 'replace')
+      );
+    case 'editorCommand':
+      return typeof candidate.commandId === 'string' && candidate.commandId.length > 0;
+    default:
+      return false;
+  }
+}
+
+function executeSourceEditCommand(commandId: Extract<EditCommandId, 'undo' | 'redo'>): boolean {
+  const activeDocument = getActiveDocument();
+
+  if (!activeDocument || editorViewMode !== 'source') {
+    return false;
+  }
+
+  const state = getSourceHistoryState(activeDocument.id, sourceTextarea.value);
+
+  if (commandId === 'undo') {
+    const nextContent = state.undoStack.pop();
+
+    if (nextContent === undefined) {
+      return false;
+    }
+
+    state.redoStack.push(state.snapshot);
+    return applySourceDocumentChange(nextContent);
+  }
+
+  const nextContent = state.redoStack.pop();
+
+  if (nextContent === undefined) {
+    return false;
+  }
+
+  pushSourceUndoSnapshot(state, state.snapshot);
+  return applySourceDocumentChange(nextContent);
+}
+
+function executeEditCommand(commandId: EditCommandId): boolean {
+  const context = readCurrentEditorCommandContext();
+  const activeDocument = context.activeDocument;
+
+  switch (commandId) {
+    case 'undo':
+    case 'redo': {
+      if (!activeDocument) {
+        showHeaderNotice('\u5f53\u524d\u6ca1\u6709\u6fc0\u6d3b\u6587\u6863\u3002', true);
+        return false;
+      }
+
+      if (commandId === 'undo' && !context.canUndo) {
+        showHeaderNotice(
+          editorViewMode === 'source'
+            ? '\u5f53\u524d\u6ca1\u6709\u53ef\u64a4\u9500\u7684\u5185\u5bb9\u3002'
+            : '\u5f53\u524d\u4e0a\u4e0b\u6587\u6ca1\u6709\u53ef\u64a4\u9500\u7684\u64cd\u4f5c\u3002',
+          true
+        );
+        return false;
+      }
+
+      if (commandId === 'redo' && !context.canRedo) {
+        showHeaderNotice(
+          editorViewMode === 'source'
+            ? '\u5f53\u524d\u6ca1\u6709\u53ef\u6062\u590d\u7684\u5185\u5bb9\u3002'
+            : '\u5f53\u524d\u4e0a\u4e0b\u6587\u6ca1\u6709\u53ef\u6062\u590d\u7684\u64cd\u4f5c\u3002',
+          true
+        );
+        return false;
+      }
+
+      const executed =
+        editorViewMode === 'source'
+          ? executeSourceEditCommand(commandId)
+          : commandId === 'undo'
+            ? executeEditorCommandWithActiveSession((_ctx, view) => undo(view.state, view.dispatch))
+            : executeEditorCommandWithActiveSession((_ctx, view) => redo(view.state, view.dispatch));
+
+      if (!executed) {
+        const notice =
+          editorViewMode === 'source'
+            ? commandId === 'undo'
+              ? '\u5f53\u524d\u6ca1\u6709\u53ef\u64a4\u9500\u7684\u5185\u5bb9\u3002'
+              : '\u5f53\u524d\u6ca1\u6709\u53ef\u6062\u590d\u7684\u5185\u5bb9\u3002'
+            : '\u5f53\u524d\u4e0a\u4e0b\u6587\u65e0\u6cd5\u6267\u884c\u8be5\u64cd\u4f5c\u3002';
+        showHeaderNotice(notice, true);
+      }
+
+      return executed;
+    }
+    case 'find':
+      if (!activeDocument) {
+        showHeaderNotice('\u5f53\u524d\u6ca1\u6709\u6fc0\u6d3b\u6587\u6863\u3002', true);
+        return false;
+      }
+      openFindReplaceBar('find');
+      return true;
+    case 'replace':
+      if (!activeDocument) {
+        showHeaderNotice('\u5f53\u524d\u6ca1\u6709\u6fc0\u6d3b\u6587\u6863\u3002', true);
+        return false;
+      }
+      openFindReplaceBar('replace');
+      return true;
+  }
+}
+
+function getEditorCommandUnavailableMessage(commandId: EditorCommandId): string | null {
+  const context = readCurrentEditorCommandContext();
+
+  if (!context.activeDocument) {
+    return '\u5f53\u524d\u6ca1\u6709\u6fc0\u6d3b\u6587\u6863\u3002';
+  }
+
+  if (editorViewMode !== 'rendered') {
+    return '\u6bb5\u843d\u4e0e\u683c\u5f0f\u547d\u4ee4\u4ec5\u5728\u6e32\u67d3\u7f16\u8f91\u89c6\u56fe\u53ef\u7528\u3002';
+  }
+
+  if (!context.isRenderedReady) {
+    return '\u5f53\u524d\u7f16\u8f91\u5668\u5c1a\u672a\u5c31\u7eea\u3002';
+  }
+
+  if (INLINE_SELECTION_COMMAND_IDS.has(commandId) && !context.hasSelection) {
+    return '\u8bf7\u5148\u9009\u62e9\u4e00\u6bb5\u6587\u672c\uff0c\u518d\u6267\u884c\u8be5\u683c\u5f0f\u64cd\u4f5c\u3002';
+  }
+
+  if (
+    (commandId === EDITOR_COMMAND_IDS.headingPromote ||
+      commandId === EDITOR_COMMAND_IDS.headingDemote) &&
+    !context.isInHeading
+  ) {
+    return '\u8bf7\u5148\u5c06\u5149\u6807\u653e\u5728\u6807\u9898\u4e2d\uff0c\u518d\u8c03\u6574\u6807\u9898\u7ea7\u522b\u3002';
+  }
+
+  if (TABLE_CONTEXT_COMMAND_IDS.has(commandId) && !context.isInTable) {
+    return '\u8bf7\u5148\u5c06\u5149\u6807\u653e\u5728\u8868\u683c\u4e2d\uff0c\u518d\u6267\u884c\u8be5\u8868\u683c\u64cd\u4f5c\u3002';
+  }
+
+  return null;
+}
+
+async function dispatchAppCommand(
+  command: AppCommandPayload,
+  source: AppCommandSource
+): Promise<void> {
+  if (source === 'keyboard' && command.type !== 'openRecentFile') {
+    markKeyboardCommandInvocation(command);
+  }
+
+  if (shouldIgnoreNativeMenuCommand(command, source)) {
+    return;
+  }
+
+  if (source === 'native-menu' && (command.type === 'editCommand' || command.type === 'editorCommand')) {
+    await waitForNativeMenuToClose();
+    focusActiveCommandContext();
+  }
+
+  switch (command.type) {
+    case 'newFile':
+      handleNewFileRequest();
+      return;
+    case 'openFile':
+      await handleOpenFileRequest();
+      return;
+    case 'openFolder':
+      await handleOpenFolderRequest();
+      return;
+    case 'saveFile':
+      await handleSaveRequest();
+      return;
+    case 'saveAsFile':
+      await handleSaveAsRequest();
+      return;
+    case 'renameFile':
+      await handleRenameRequest();
+      return;
+    case 'closeFile': {
+      const activeDocument = getActiveDocument();
+
+      if (activeDocument) {
+        await closeDocument(activeDocument.id);
+      }
+      return;
+    }
+    case 'clearRecentFiles':
+      recentFiles = [];
+      persistRecentFiles();
+      return;
+    case 'openRecentFile':
+      await openDocumentFromPath(command.path);
+      return;
+    case 'editCommand':
+      executeEditCommand(command.commandId);
+      return;
+    case 'editorCommand':
+      executeEditorCommand(command.commandId);
+      return;
+  }
+}
+
+function handleGlobalFileShortcut(event: KeyboardEvent): void {
+  if (!canHandleFileShortcutEvent(event)) {
+    return;
+  }
+
+  const shortcut = findMatchingFileShortcut(event);
+
+  if (!shortcut) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  void dispatchAppCommand(shortcut.command, 'keyboard');
+}
+
+function handleGlobalEditShortcut(event: KeyboardEvent): void {
+  if (!canHandleEditShortcutEvent(event)) {
+    return;
+  }
+
+  const shortcut = findMatchingEditShortcut(event);
+
+  if (!shortcut) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  void dispatchAppCommand(
+    {
+      type: 'editCommand',
+      commandId: shortcut.commandId
+    },
+    'keyboard'
   );
 }
 
@@ -4182,8 +5793,13 @@ function handleGlobalEditorShortcut(event: KeyboardEvent): void {
 
   event.preventDefault();
   event.stopPropagation();
-  markKeyboardEditorCommandInvocation(shortcut.commandId);
-  executeEditorCommand(shortcut.commandId);
+  void dispatchAppCommand(
+    {
+      type: 'editorCommand',
+      commandId: shortcut.commandId
+    },
+    'keyboard'
+  );
 }
 
 function createHeadingMarkerOverlay(
@@ -4283,6 +5899,359 @@ function getTrailingCodeBlockInfo(view: EditorView): TrailingCodeBlockInfo | nul
     pos,
     contentSize: lastNode.content.size
   };
+}
+
+function normalizeCodeBlockLanguage(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim().toLowerCase();
+
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  return CODE_BLOCK_LANGUAGE_ALIASES[trimmed] ?? trimmed;
+}
+
+async function loadHighlightJsApi(): Promise<HighlightJsApi> {
+  if (highlightJsApi) {
+    return highlightJsApi;
+  }
+
+  if (!highlightJsLoadPromise) {
+    highlightJsLoadPromise = import('highlight.js/lib/core').then((module) => {
+      highlightJsApi = module.default as HighlightJsApi;
+      return highlightJsApi;
+    });
+  }
+
+  return highlightJsLoadPromise;
+}
+
+function scheduleCodeBlockHighlightRefresh(): void {
+  if (codeBlockHighlightRefreshFrame !== null) {
+    return;
+  }
+
+  codeBlockHighlightRefreshFrame = window.requestAnimationFrame(() => {
+    codeBlockHighlightRefreshFrame = null;
+
+    for (const view of Array.from(codeBlockHighlightViews)) {
+      if (!view.dom.isConnected) {
+        codeBlockHighlightViews.delete(view);
+        continue;
+      }
+
+      view.dispatch(view.state.tr.setMeta(CODE_BLOCK_HIGHLIGHT_REFRESH_META, true));
+    }
+  });
+}
+
+async function ensureCodeBlockHighlightLanguage(language: string): Promise<boolean> {
+  if (registeredHighlightLanguages.has(language)) {
+    return true;
+  }
+
+  const existingLoad = pendingHighlightLanguageLoads.get(language);
+
+  if (existingLoad) {
+    return existingLoad;
+  }
+
+  const loader = CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS[language];
+
+  if (!loader) {
+    return false;
+  }
+
+  const loadTask = (async () => {
+    try {
+      const [api, languageModule] = await Promise.all([loadHighlightJsApi(), loader()]);
+
+      if (!registeredHighlightLanguages.has(language)) {
+        api.registerLanguage(language, languageModule.default);
+        registeredHighlightLanguages.add(language);
+      }
+
+      scheduleCodeBlockHighlightRefresh();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      pendingHighlightLanguageLoads.delete(language);
+    }
+  })();
+
+  pendingHighlightLanguageLoads.set(language, loadTask);
+  return loadTask;
+}
+
+function collectCodeBlockLanguages(doc: EditorView['state']['doc']): string[] {
+  const languages = new Set<string>();
+
+  doc.descendants((node) => {
+    if (node.type.name !== 'code_block') {
+      return true;
+    }
+
+    const language = normalizeCodeBlockLanguage(node.attrs.language);
+
+    if (language && CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS[language]) {
+      languages.add(language);
+    }
+
+    return true;
+  });
+
+  return [...languages];
+}
+
+function requestCodeBlockHighlightSupport(doc: EditorView['state']['doc']): void {
+  for (const language of collectCodeBlockLanguages(doc)) {
+    if (!registeredHighlightLanguages.has(language) && !pendingHighlightLanguageLoads.has(language)) {
+      void ensureCodeBlockHighlightLanguage(language);
+    }
+  }
+}
+
+function getCachedHighlightedMarkup(api: HighlightJsApi, language: string, text: string): string | null {
+  const cacheKey = `${language}\u0000${text}`;
+  const cached = codeBlockHighlightMarkupCache.get(cacheKey);
+
+  if (cached !== undefined) {
+    codeBlockHighlightMarkupCache.delete(cacheKey);
+    codeBlockHighlightMarkupCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  try {
+    const highlighted = api.highlight(text, {
+      language,
+      ignoreIllegals: true
+    }).value;
+
+    codeBlockHighlightMarkupCache.set(cacheKey, highlighted);
+
+    while (codeBlockHighlightMarkupCache.size > CODE_BLOCK_HIGHLIGHT_CACHE_LIMIT) {
+      const oldestKey = codeBlockHighlightMarkupCache.keys().next().value;
+
+      if (!oldestKey) {
+        break;
+      }
+
+      codeBlockHighlightMarkupCache.delete(oldestKey);
+    }
+
+    return highlighted;
+  } catch {
+    return null;
+  }
+}
+
+function collectHighlightDecorationsFromNode(
+  node: ChildNode,
+  codeStart: number,
+  offset: number,
+  classNames: string[],
+  decorations: Decoration[]
+): number {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? '';
+    const nextOffset = offset + text.length;
+
+    if (text.length > 0 && classNames.length > 0) {
+      decorations.push(
+        Decoration.inline(codeStart + offset, codeStart + nextOffset, {
+          class: [...new Set(classNames)].join(' ')
+        })
+      );
+    }
+
+    return nextOffset;
+  }
+
+  if (!(node instanceof HTMLElement)) {
+    return offset;
+  }
+
+  const nextClassNames = [
+    ...classNames,
+    ...node.className
+      .split(/\s+/)
+      .map((name) => name.trim())
+      .filter((name) => name.startsWith('hljs-'))
+  ];
+
+  let nextOffset = offset;
+
+  for (const child of Array.from(node.childNodes)) {
+    nextOffset = collectHighlightDecorationsFromNode(
+      child,
+      codeStart,
+      nextOffset,
+      nextClassNames,
+      decorations
+    );
+  }
+
+  return nextOffset;
+}
+
+function documentHasCodeBlockBetween(
+  doc: EditorView['state']['doc'],
+  from: number,
+  to: number
+): boolean {
+  const docSize = doc.content.size;
+  const start = Math.max(0, Math.min(from, docSize));
+  const end = Math.max(start, Math.min(Math.max(from, to) + 1, docSize));
+  let hasCodeBlock = false;
+
+  doc.nodesBetween(start, end, (node) => {
+    if (node.type.name === 'code_block') {
+      hasCodeBlock = true;
+      return false;
+    }
+
+    return true;
+  });
+
+  return hasCodeBlock;
+}
+
+function transactionTouchesCodeBlock(
+  tr: Parameters<NonNullable<Plugin['spec']['state']>['apply']>[0],
+  previousDoc: EditorView['state']['doc'],
+  nextDoc: EditorView['state']['doc']
+): boolean {
+  let touchesCodeBlock = false;
+
+  for (const map of tr.mapping.maps) {
+    map.forEach((oldStart, oldEnd, newStart, newEnd) => {
+      if (touchesCodeBlock) {
+        return;
+      }
+
+      if (
+        documentHasCodeBlockBetween(previousDoc, oldStart, oldEnd) ||
+        documentHasCodeBlockBetween(nextDoc, newStart, newEnd)
+      ) {
+        touchesCodeBlock = true;
+      }
+    });
+
+    if (touchesCodeBlock) {
+      break;
+    }
+  }
+
+  return touchesCodeBlock;
+}
+
+function buildCodeBlockHighlightDecorations(doc: EditorView['state']['doc']): DecorationSet {
+  requestCodeBlockHighlightSupport(doc);
+
+  if (!highlightJsApi) {
+    return DecorationSet.empty;
+  }
+
+  const decorations: Decoration[] = [];
+
+  doc.descendants((node, position) => {
+    if (node.type.name !== 'code_block') {
+      return true;
+    }
+
+    const language = normalizeCodeBlockLanguage(node.attrs.language);
+
+    if (
+      !language ||
+      node.textContent.length === 0 ||
+      !registeredHighlightLanguages.has(language) ||
+      !highlightJsApi?.getLanguage(language)
+    ) {
+      return true;
+    }
+
+    const highlighted = getCachedHighlightedMarkup(highlightJsApi, language, node.textContent);
+
+    if (!highlighted) {
+      return true;
+    }
+
+    const root = codeBlockHighlightParser.parseFromString(`<div>${highlighted}</div>`, 'text/html').body
+      .firstElementChild;
+
+    if (!root) {
+      return true;
+    }
+
+    const codeStart = position + 1;
+    let offset = 0;
+
+    decorations.push(
+      Decoration.node(position, position + node.nodeSize, {
+        class: 'code-block-highlighted'
+      })
+    );
+
+    for (const child of Array.from(root.childNodes)) {
+      offset = collectHighlightDecorationsFromNode(child, codeStart, offset, [], decorations);
+    }
+
+    return true;
+  });
+
+  return DecorationSet.create(doc, decorations);
+}
+
+function createCodeBlockHighlightPlugin(): Plugin {
+  const key = new PluginKey<DecorationSet>('TIAS_CODE_BLOCK_HIGHLIGHT');
+
+  return new Plugin({
+    key,
+    state: {
+      init: (_, state) => buildCodeBlockHighlightDecorations(state.doc),
+      apply: (tr, previous, oldState) => {
+        if (tr.getMeta(CODE_BLOCK_HIGHLIGHT_REFRESH_META)) {
+          return buildCodeBlockHighlightDecorations(tr.doc);
+        }
+
+        if (!tr.docChanged) {
+          return previous.map(tr.mapping, tr.doc);
+        }
+
+        if (!transactionTouchesCodeBlock(tr, oldState.doc, tr.doc)) {
+          requestCodeBlockHighlightSupport(tr.doc);
+          return previous.map(tr.mapping, tr.doc);
+        }
+
+        return buildCodeBlockHighlightDecorations(tr.doc);
+      }
+    },
+    props: {
+      decorations(state) {
+        return key.getState(state) ?? DecorationSet.empty;
+      }
+    },
+    view(view) {
+      codeBlockHighlightViews.add(view);
+      requestCodeBlockHighlightSupport(view.state.doc);
+
+      return {
+        update(updatedView, previousState) {
+          if (updatedView.state.doc !== previousState.doc) {
+            requestCodeBlockHighlightSupport(updatedView.state.doc);
+          }
+        },
+        destroy() {
+          codeBlockHighlightViews.delete(view);
+        }
+      };
+    }
+  });
 }
 
 function shouldExitTrailingCodeBlock(view: EditorView): boolean {
@@ -4396,6 +6365,7 @@ function renderSidebar(animateModeSwitch = false): void {
 
 function renderEditorEmptyState(): void {
   void destroyAllMilkdownSessions();
+  closeFindReplaceBar();
   clearHeadingMarkerOverlay();
   clearHeadingTargetHighlight();
   content.className = 'viewer-content viewer-content-empty';
@@ -4412,6 +6382,26 @@ function renderEditorEmptyState(): void {
     '\u53ef\u4ee5\u901a\u8fc7\u201c\u6587\u4ef6 -> \u65b0\u5efa\u201d\u6216\u201c\u6587\u4ef6 -> \u6253\u5f00\u201d\u5f00\u59cb\u3002';
 
   content.append(emptyText, emptyHint);
+  renderStatusBar();
+}
+
+function renderSourceEditor(documentState: DocumentState): void {
+  clearHeadingMarkerOverlay();
+  clearHeadingTargetHighlight();
+  content.className = 'viewer-content viewer-content-source';
+
+  if (sourceEditorShell.parentElement !== content) {
+    content.replaceChildren(sourceEditorShell);
+  }
+
+  if (sourceTextarea.value !== documentState.content) {
+    sourceTextarea.value = documentState.content;
+  }
+
+  setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: false });
+  restoreSourceEditorContext(documentState);
+  sourceTextarea.focus();
+  renderStatusBar();
 }
 
 function createMilkdownHost(documentId: string): HTMLDivElement {
@@ -4442,7 +6432,12 @@ function createMilkdownEditorForDocument(documentState: DocumentState, host: HTM
         ...options,
         handlers: extendInlineHtmlRemarkHandlers(options.handlers as Record<string, unknown> | undefined)
       }));
-      ctx.update(prosePluginsCtx, (plugins) => [...plugins, createTrailingCodeBlockExitPlugin(documentId)]);
+      ctx.update(prosePluginsCtx, (plugins) => [
+        ...plugins,
+        proseHistory(),
+        createCodeBlockHighlightPlugin(),
+        createTrailingCodeBlockExitPlugin(documentId)
+      ]);
       ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
         const targetDocument = documents.find((item) => item.id === documentId);
 
@@ -4456,10 +6451,17 @@ function createMilkdownEditorForDocument(documentState: DocumentState, host: HTM
           scheduleOutlineSidebarRefresh(documentId);
           renderHeadingMarkerOverlay(documentId);
         }
-      }).selectionUpdated(() => {
+      }).selectionUpdated((_ctx, selection) => {
         if (activeDocumentId === documentId) {
+          const targetDocument = documents.find((item) => item.id === documentId);
+
+          if (targetDocument) {
+            rememberMilkdownSelection(targetDocument, selection);
+          }
+
           renderHeadingMarkerOverlay(documentId);
           scheduleOutlineActiveStateRefresh(documentId);
+          scheduleNativeMenuStateSync();
         }
       });
     })
@@ -4539,11 +6541,19 @@ async function renderMilkdownEditor(
   documentState: DocumentState,
   activationToken: number = milkdownActivationToken
 ): Promise<void> {
+  if (editorViewMode !== 'rendered') {
+    return;
+  }
+
   persistActiveMilkdownSessionState();
 
   const sessionResult = await ensureMilkdownSession(documentState);
 
-  if (!isCurrentMilkdownActivation(activationToken) || activeDocumentId !== documentState.id) {
+  if (
+    editorViewMode !== 'rendered' ||
+    !isCurrentMilkdownActivation(activationToken) ||
+    activeDocumentId !== documentState.id
+  ) {
     return;
   }
 
@@ -4560,9 +6570,14 @@ async function renderMilkdownEditor(
   setActiveEditorSurface(sessionResult.session);
   restoreMilkdownSessionScroll(sessionResult.session);
   requestSidebarRefreshForCurrentMode();
+  scheduleNativeMenuStateSync();
   renderHeadingMarkerOverlay(documentState.id);
   scheduleOutlineActiveStateRefresh(documentState.id);
   pruneMilkdownSessionCache(documentState.id);
+  if (findReplaceOpen) {
+    recomputeFindReplaceMatches();
+    renderFindReplaceBar();
+  }
 }
 
 function activatePreparedDocument(
@@ -4578,6 +6593,14 @@ function activatePreparedDocument(
   upsertRecentFile(documentState);
   activeDocumentId = documentState.id;
   touchDocument(documentState);
+
+  if (editorViewMode !== 'rendered') {
+    requestRender({ editor: true, activationToken });
+    requestSidebarRefreshForCurrentMode();
+    renderStatusBar();
+    return;
+  }
+
   bindMilkdownSession(session);
   setActiveEditorSurface(session);
   restoreMilkdownSessionScroll(session);
@@ -4595,6 +6618,11 @@ function renderActiveDocument(activationToken: number = milkdownActivationToken)
 
   if (!activeDocument) {
     renderEditorEmptyState();
+    return;
+  }
+
+  if (editorViewMode === 'source') {
+    renderSourceEditor(activeDocument);
     return;
   }
 
@@ -4624,6 +6652,12 @@ function applyOpenedDocumentState(document: DocumentState, opened: OpenedDocumen
   document.isUntitled = false;
   document.editorScrollTop = 0;
   document.editorScrollLeft = 0;
+  document.editorSelectionFrom = 0;
+  document.editorSelectionTo = 0;
+  document.sourceSelectionStart = 0;
+  document.sourceSelectionEnd = 0;
+  document.sourceScrollTop = 0;
+  setSourceHistorySnapshot(document.id, opened.content, { resetStacks: true });
 }
 
 function createDocumentState(document: OpenedDocument): DocumentState {
@@ -4643,9 +6677,15 @@ function createDocumentState(document: OpenedDocument): DocumentState {
     lastViewedAt: now,
     listOrder: nextListOrder(),
     editorScrollTop: 0,
-    editorScrollLeft: 0
+    editorScrollLeft: 0,
+    editorSelectionFrom: 0,
+    editorSelectionTo: 0,
+    sourceSelectionStart: 0,
+    sourceSelectionEnd: 0,
+    sourceScrollTop: 0
   };
 
+  setSourceHistorySnapshot(state.id, document.content, { resetStacks: true });
   return state;
 }
 
@@ -4662,6 +6702,7 @@ async function activateDocument(
   activationToken: number = beginMilkdownActivation()
 ): Promise<void> {
   syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
 
   if (!isCurrentMilkdownActivation(activationToken)) {
     return;
@@ -4687,6 +6728,7 @@ async function openDocumentFromPath(
   const activationToken = beginMilkdownActivation();
 
   syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
 
   const existingDocument = documents.find((document) => document.filePath === filePath);
 
@@ -4735,6 +6777,22 @@ async function openDocumentFromPath(
     }
 
     const documentState = createDocumentState(document);
+
+    if (editorViewMode === 'source') {
+      upsertDocument(documentState);
+      activeDocumentId = documentState.id;
+      touchDocument(documentState);
+      upsertRecentFile(documentState);
+      requestRender({ editor: true, activationToken });
+      requestSidebarRefreshForCurrentMode();
+
+      if (updateCurrentDirectory) {
+        await setCurrentDirectoryFromFilePath(filePath, activationToken);
+      }
+
+      return;
+    }
+
     const sessionResult = await ensureMilkdownSession(documentState);
 
     if (sessionResult.kind === 'failed') {
@@ -4772,6 +6830,7 @@ async function openDocumentFromPath(
 
 function createUntitledDocument(): void {
   syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
   const activationToken = beginMilkdownActivation();
 
   const now = Date.now();
@@ -4789,9 +6848,15 @@ function createUntitledDocument(): void {
     lastViewedAt: now,
     listOrder: nextListOrder(),
     editorScrollTop: 0,
-    editorScrollLeft: 0
+    editorScrollLeft: 0,
+    editorSelectionFrom: 0,
+    editorSelectionTo: 0,
+    sourceSelectionStart: 0,
+    sourceSelectionEnd: 0,
+    sourceScrollTop: 0
   };
 
+  setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: true });
   upsertDocument(documentState);
   activeDocumentId = documentState.id;
   requestRender({ editor: true, activationToken });
@@ -4804,63 +6869,89 @@ function isPathOpenByOtherDocument(filePath: string, currentDocumentId: string |
   );
 }
 
-function ensureMarkdownPath(filePath: string): string {
-  const trimmed = filePath.trim();
-  const separatorIndex = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
-  const filePart = trimmed.slice(separatorIndex + 1);
-  const dotIndex = filePart.lastIndexOf('.');
-
-  if (dotIndex <= 0 || dotIndex === filePart.length - 1) {
-    return `${trimmed}.md`;
+async function validateMarkdownSavePath(filePath: string): Promise<string | null> {
+  try {
+    return await invoke<string>('validate_markdown_save_path', {
+      path: filePath
+    });
+  } catch (error) {
+    showHeaderNotice(
+      typeof error === 'string' && error.length > 0 ? error : '保存路径无效。',
+      true
+    );
+    return null;
   }
-
-  return trimmed;
 }
 
-function normalizeMarkdownFileName(rawValue: string): { ok: true; value: string } | { ok: false; error: string } {
-  const trimmed = rawValue.trim();
+function setRenameDialogValidationState(pending: boolean): void {
+  renameDialogValidationPending = pending;
+  renameDialogConfirm.disabled = pending;
+  renameDialogConfirm.textContent = pending ? '\u68c0\u67e5\u4e2d...' : (renameDialogConfirm.dataset.defaultText ?? renameDialogConfirm.textContent);
+}
 
-  if (!trimmed) {
-    return {
-      ok: false,
-      error: '\u6587\u4ef6\u540d\u4e0d\u80fd\u4e3a\u7a7a\u3002'
-    };
+async function validateSelectedSavePath(filePath: string): Promise<string | null> {
+  try {
+    return await invoke<string>('validate_markdown_save_path', {
+      path: filePath
+    });
+  } catch (error) {
+    showHeaderNotice(
+      typeof error === 'string' && error.length > 0 ? error : '保存路径无效。',
+      true
+    );
+    return null;
+  }
+}
+
+async function validateSavePathFromDialog(filePath: string): Promise<string | null> {
+  try {
+    return await invoke<string>('validate_markdown_save_path', {
+      path: filePath
+    });
+  } catch (error) {
+    showHeaderNotice(
+      typeof error === 'string' && error.length > 0 ? error : '保存路径无效。',
+      true
+    );
+    return null;
+  }
+}
+
+async function submitRenameDialog(): Promise<void> {
+  if (renameDialogValidationPending) {
+    return;
   }
 
-  if (/[\\/]/.test(trimmed)) {
-    return {
-      ok: false,
-      error: '\u6587\u4ef6\u540d\u4e0d\u80fd\u5305\u542b\u8def\u5f84\u5206\u9694\u7b26\u3002'
-    };
-  }
+  const requestToken = ++renameDialogValidationToken;
+  renameDialogError.textContent = '';
+  setRenameDialogValidationState(true);
 
-  if (/[<>:"|?*]/.test(trimmed)) {
-    return {
-      ok: false,
-      error: '\u6587\u4ef6\u540d\u5305\u542b Windows \u4e0d\u5141\u8bb8\u7684\u5b57\u7b26\u3002'
-    };
-  }
+  try {
+    const normalized = await invoke<string>('validate_markdown_file_name', {
+      newName: renameDialogInput.value
+    });
 
-  const fileName = (() => {
-    const dotIndex = trimmed.lastIndexOf('.');
-
-    if (dotIndex <= 0 || dotIndex === trimmed.length - 1) {
-      return `${trimmed}.md`;
+    if (requestToken !== renameDialogValidationToken || !renameDialogResolver) {
+      return;
     }
 
-    const extension = trimmed.slice(dotIndex + 1).toLowerCase();
-
-    if (extension === 'md' || extension === 'markdown' || extension === 'txt') {
-      return trimmed;
+    closeRenameDialog(normalized);
+  } catch (error) {
+    if (requestToken !== renameDialogValidationToken || !renameDialogResolver) {
+      return;
     }
 
-    return trimmed;
-  })();
-
-  return {
-    ok: true,
-    value: fileName
-  };
+    renameDialogError.textContent =
+      typeof error === 'string' && error.length > 0
+        ? error
+        : '\u6587\u4ef6\u540d\u6821\u9a8c\u5931\u8d25\u3002';
+    renameDialogInput.focus();
+    renameDialogInput.select();
+  } finally {
+    if (requestToken === renameDialogValidationToken) {
+      setRenameDialogValidationState(false);
+    }
+  }
 }
 
 function closeRenameDialog(result: string | null): void {
@@ -4868,6 +6959,8 @@ function closeRenameDialog(result: string | null): void {
   const resolver = renameDialogResolver;
   renameDialogResolver = null;
   renameDialogError.textContent = '';
+  renameDialogValidationToken += 1;
+  setRenameDialogValidationState(false);
 
   if (resolver) {
     resolver(result);
@@ -4883,7 +6976,9 @@ function showRenameDialog(options: RenameDialogOptions): Promise<string | null> 
   renameDialogDescription.textContent = options.description;
   renameDialogInput.value = options.defaultValue;
   renameDialogConfirm.textContent = options.confirmText;
+  renameDialogConfirm.dataset.defaultText = options.confirmText;
   renameDialogError.textContent = '';
+  setRenameDialogValidationState(false);
   renameOverlay.classList.remove('is-hidden');
 
   return new Promise((resolve) => {
@@ -4915,6 +7010,7 @@ function applySavedDocumentState(document: DocumentState, saved: OpenedDocument)
   document.isUntitled = false;
   document.lastViewedAt = now;
   markMilkdownSynchronized(document.id, document.content);
+  setSourceHistorySnapshot(document.id, document.content, { resetStacks: true });
   upsertRecentFile(document);
 }
 
@@ -4935,6 +7031,7 @@ function applyRenamedDocumentState(document: DocumentState, renamed: OpenedDocum
     document.content = renamed.content;
     document.savedContent = renamed.content;
     document.sourceSnapshot = createMarkdownSourceSnapshot(renamed.content);
+    setSourceHistorySnapshot(document.id, renamed.content, { resetStacks: true });
   }
 
   upsertRecentFile(document);
@@ -4942,7 +7039,7 @@ function applyRenamedDocumentState(document: DocumentState, renamed: OpenedDocum
 
 async function pickSavePath(defaultPath: string): Promise<string | null> {
   const selected = await save({
-    filters: MARKDOWN_FILTERS,
+    filters: SAVE_MARKDOWN_FILTERS,
     defaultPath
   });
 
@@ -4950,14 +7047,14 @@ async function pickSavePath(defaultPath: string): Promise<string | null> {
     return null;
   }
 
-  return ensureMarkdownPath(selected);
+  return validateSavePathFromDialog(selected);
 }
 
 async function handleOpenFileRequest(): Promise<void> {
   const selected = await open({
     directory: false,
     multiple: false,
-    filters: MARKDOWN_FILTERS
+    filters: OPEN_MARKDOWN_FILTERS
   });
 
   if (!selected || Array.isArray(selected)) {
@@ -5166,55 +7263,8 @@ if (currentDirectoryPath) {
   void refreshCurrentDirectoryFiles();
 }
 
-await listen(OPEN_FILE_EVENT, async () => {
-  await handleOpenFileRequest();
-});
-
-await listen(OPEN_FOLDER_EVENT, async () => {
-  await handleOpenFolderRequest();
-});
-
-await listen(NEW_FILE_EVENT, async () => {
-  handleNewFileRequest();
-});
-
-await listen(SAVE_FILE_EVENT, async () => {
-  await handleSaveRequest();
-});
-
-await listen(SAVE_AS_FILE_EVENT, async () => {
-  await handleSaveAsRequest();
-});
-
-await listen(RENAME_FILE_EVENT, async () => {
-  await handleRenameRequest();
-});
-
-await listen(CLOSE_FILE_EVENT, async () => {
-  const activeDocument = getActiveDocument();
-
-  if (activeDocument) {
-    await closeDocument(activeDocument.id);
-  }
-});
-
-await listen(CLEAR_RECENT_FILES_EVENT, async () => {
-  recentFiles = [];
-  persistRecentFiles();
-});
-
-await listen<string>(EDITOR_COMMAND_EVENT, async (event) => {
-  if (typeof event.payload === 'string' && event.payload.length > 0) {
-    if (shouldIgnoreMenuEditorCommand(event.payload)) {
-      return;
-    }
-
-    executeEditorCommand(event.payload);
-  }
-});
-
-await listen<string>(OPEN_RECENT_FILE_EVENT, async (event) => {
-  if (typeof event.payload === 'string' && event.payload.length > 0) {
-    await openDocumentFromPath(event.payload);
+await listen<unknown>(APP_COMMAND_EVENT, async (event) => {
+  if (isAppCommandPayload(event.payload)) {
+    await dispatchAppCommand(event.payload, 'native-menu');
   }
 });

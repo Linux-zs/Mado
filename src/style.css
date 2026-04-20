@@ -64,14 +64,104 @@ body.is-resizing-layout {
   --sidebar-width: 320px;
 }
 
+.workspace.is-sidebar-collapsed .sidebar,
+.workspace.is-sidebar-collapsed .workspace-resize-handle {
+  display: none;
+}
+
 .status-bar {
   display: flex;
   flex: 0 0 28px;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   width: 100%;
   height: 28px;
+  padding: 0 10px 0 0;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   background: rgba(247, 242, 234, 0.94);
+  color: rgba(48, 43, 37, 0.64);
+  user-select: none;
+}
+
+.status-bar-section {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.status-bar-section-left {
+  gap: 0;
+}
+
+.status-bar-section-right {
+  gap: 12px;
+  margin-left: auto;
+}
+
+.status-bar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(48, 43, 37, 0.46);
+  font:
+    500 16px/1 'Segoe UI',
+    'Microsoft YaHei UI',
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease);
+}
+
+.status-bar-button:hover:not(:disabled) {
+  background: rgba(60, 49, 35, 0.08);
+  color: rgba(33, 29, 24, 0.84);
+}
+
+.status-bar-button.is-active {
+  color: rgba(48, 43, 37, 0.46);
+  background: transparent;
+}
+
+.status-bar-button.is-collapsed {
+  color: rgba(48, 43, 37, 0.46);
+}
+
+.status-bar-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.status-bar-button-source {
+  width: auto;
+  min-width: 32px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font:
+    600 12px/1 'Consolas',
+    'Cascadia Code',
+    'Microsoft YaHei UI',
+    monospace;
+}
+
+.status-bar-button-source.is-active {
+  color: rgba(33, 29, 24, 0.76);
+  background: rgba(60, 49, 35, 0.06);
+}
+
+.status-bar-metric {
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(48, 43, 37, 0.64);
 }
 
 .sidebar {
@@ -80,7 +170,6 @@ body.is-resizing-layout {
   flex-direction: column;
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
   background: rgba(247, 242, 234, 0.9);
 }
 
@@ -109,6 +198,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   align-items: center;
   gap: 32px;
   padding: 4px 18px 0;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
@@ -146,6 +236,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .sidebar-view {
@@ -518,6 +609,88 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
+.find-replace-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(250, 246, 240, 0.96);
+}
+
+.find-replace-bar.is-hidden {
+  display: none;
+}
+
+.find-replace-input {
+  height: 28px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid rgba(60, 49, 35, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #2a241e;
+  outline: none;
+  font:
+    13px/1 'Segoe UI',
+    'Microsoft YaHei UI',
+    sans-serif;
+}
+
+.find-replace-query {
+  flex: 1 1 220px;
+}
+
+.find-replace-replace {
+  flex: 1 1 220px;
+}
+
+.find-replace-input:focus {
+  border-color: rgba(154, 115, 69, 0.48);
+  box-shadow: 0 0 0 3px rgba(154, 115, 69, 0.12);
+}
+
+.find-replace-count {
+  min-width: 52px;
+  color: rgba(48, 43, 37, 0.56);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+
+.find-replace-button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(48, 43, 37, 0.72);
+  font:
+    500 12px/1 'Segoe UI',
+    'Microsoft YaHei UI',
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease);
+}
+
+.find-replace-button:hover:not(:disabled) {
+  background: rgba(60, 49, 35, 0.08);
+  color: #2a241e;
+}
+
+.find-replace-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.find-replace-close {
+  margin-left: auto;
+}
+
 .viewer-file-name {
   font-size: 15px;
   font-weight: 600;
@@ -552,11 +725,45 @@ body.is-resizing-layout .workspace-resize-handle::after,
   overflow: hidden;
 }
 
+.viewer-content-source {
+  padding: 0;
+  overflow: hidden;
+}
+
 .editor-surface-stack {
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.source-editor-shell {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.source-editor {
+  width: 100%;
+  height: 100%;
+  padding: 22px 26px 24px;
+  border: 0;
+  background: transparent;
+  color: #2d2923;
+  resize: none;
+  outline: none;
+  scrollbar-color: rgba(72, 64, 54, 0.42) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  font:
+    13px/1.72 'Consolas',
+    'Cascadia Code',
+    'Microsoft YaHei UI',
+    monospace;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  tab-size: 2;
 }
 
 .editor-surface {
@@ -950,6 +1157,72 @@ body.is-resizing-layout .workspace-resize-handle::after,
     'Cascadia Code',
     'Microsoft YaHei UI',
     monospace;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted code {
+  color: #2d2923;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-comment,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-quote {
+  color: #8b8276;
+  font-style: italic;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-keyword,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-selector-tag,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-literal,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-name,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-operator {
+  color: #8b4f1d;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-string,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-doctag,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-regexp,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-template-string {
+  color: #2f7a53;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-number,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-symbol,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-bullet,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-variable,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-template-variable {
+  color: #b15f1c;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-title,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-title.class_,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-title.class,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-section,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-function .hljs-title {
+  color: #2f5d9c;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-built_in,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-type,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-class,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-property {
+  color: #7a5f20;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-attr,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-attribute,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-selector-id,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-selector-class,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-selector-attr,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-selector-pseudo {
+  color: #6f3f22;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-meta,
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-meta .hljs-keyword {
+  color: #5d6f82;
+}
+
+.milkdown-host .ProseMirror pre.code-block-highlighted .hljs-punctuation {
+  color: rgba(45, 41, 35, 0.78);
 }
 
 .milkdown-host .ProseMirror table {

@@ -10,7 +10,8 @@
     "@milkdown/preset-gfm": "^7.20.0",
     "@milkdown/theme-nord": "^7.20.0",
     "@milkdown/utils": "^7.20.0",
-    "@tauri-apps/plugin-dialog": "^2.7.0"
+    "@tauri-apps/plugin-dialog": "^2.7.0",
+    "highlight.js": "^11.11.1"
   },
   "scripts": {
     "dev": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri dev",

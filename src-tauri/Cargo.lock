@@ -1760,9 +1760,12 @@ name = "mado"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "webview2-com",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
