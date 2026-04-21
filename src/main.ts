@@ -396,7 +396,6 @@ const SAVE_MARKDOWN_FILTERS = [
 const RECENT_FILES_STORAGE_KEY = 'tias.recent-files.v1';
 const CURRENT_DIRECTORY_STORAGE_KEY = 'tias.current-directory.v1';
 const FILE_TREE_EXPANSION_STORAGE_KEY = 'tias.file-tree-expansion.v1';
-const FILES_SIDEBAR_VIEW_MODE_STORAGE_KEY = 'tias.files-sidebar-view-mode.v1';
 const FILES_SIDEBAR_SEARCH_VISIBLE_STORAGE_KEY = 'tias.files-sidebar-search-visible.v1';
 const UNTITLED_FILE_NAME = '\u672a\u547d\u540d.md';
 const FILES_MODE = 'files';
@@ -534,7 +533,7 @@ let directoryFilesNotice: string | null = null;
 let directoryFilesLoadToken = 0;
 let sidebarMode: SidebarMode = FILES_MODE;
 let sidebarVisibleMode: SidebarMode = FILES_MODE;
-let filesSidebarViewMode = loadFilesSidebarViewMode();
+let filesSidebarViewMode: FilesSidebarViewMode = 'tree';
 let filesSidebarSearchState: SidebarSearchState = {
   isVisible: loadFilesSidebarSearchVisible(),
   query: ''
@@ -1166,7 +1165,7 @@ filesSidebarSearchClose.addEventListener('click', () => {
 });
 
 filesSidebarView.addEventListener('contextmenu', handleSidebarContextMenu);
-outlineSidebarView.addEventListener('contextmenu', handleSidebarContextMenu);
+outlineSidebarView.addEventListener('contextmenu', handleOutlineContextMenu);
 content.addEventListener('contextmenu', handleEditorContextMenu);
 
 sourceTextarea.addEventListener('input', () => {
@@ -2512,23 +2511,6 @@ function loadCurrentDirectoryPath(): string | null {
     return stored && stored.trim().length > 0 ? stored : null;
   } catch {
     return null;
-  }
-}
-
-function loadFilesSidebarViewMode(): FilesSidebarViewMode {
-  try {
-    const stored = window.localStorage.getItem(FILES_SIDEBAR_VIEW_MODE_STORAGE_KEY);
-    return stored === 'list' ? 'list' : 'tree';
-  } catch {
-    return 'tree';
-  }
-}
-
-function persistFilesSidebarViewMode(): void {
-  try {
-    window.localStorage.setItem(FILES_SIDEBAR_VIEW_MODE_STORAGE_KEY, filesSidebarViewMode);
-  } catch {
-    // Keep the in-memory preference even if persistence fails.
   }
 }
 
@@ -4109,22 +4091,6 @@ function setSidebarMode(nextMode: SidebarMode): void {
   requestRender({ sidebar: true, animateSidebar: true });
 }
 
-function setFilesSidebarViewMode(nextMode: FilesSidebarViewMode): void {
-  if (filesSidebarViewMode === nextMode) {
-    requestFilesSidebarRefresh();
-    return;
-  }
-
-  filesSidebarViewMode = nextMode;
-  persistFilesSidebarViewMode();
-
-  if (sidebarMode !== FILES_MODE) {
-    setSidebarMode(FILES_MODE);
-  } else {
-    requestFilesSidebarRefresh();
-  }
-}
-
 function setFilesSidebarSearchVisible(nextVisible: boolean): void {
   filesSidebarSearchState.isVisible = nextVisible;
 
@@ -4688,75 +4654,7 @@ function buildFileTreeRoot(
 }
 
 function buildFilesSidebarListRows(): FileTreeRow[] {
-  const openDocumentsByPath = new Map<string, DocumentState>();
-
-  for (const document of documents) {
-    if (document.filePath) {
-      openDocumentsByPath.set(document.filePath, document);
-    }
-  }
-
-  const folderRows = getFilteredDirectoryFolders().map((entry) => ({
-    key: `list-folder:${entry.path}`,
-    kind: 'folder' as const,
-    name: entry.name,
-    relativePath: normalizeTreeRelativePath(entry.relativePath),
-    filePath: entry.path,
-    documentId: null,
-    isActive: false,
-    isDirty: false,
-    isOpen: false,
-    isExpanded: false,
-    hasChildren: false,
-    depth: Math.max(0, normalizeTreeRelativePath(entry.relativePath).split('/').filter(Boolean).length - 1)
-  }));
-  const fileRows = getFilteredDirectoryFiles().map((entry) => {
-      const openDocument = openDocumentsByPath.get(entry.filePath);
-      const relativePath =
-        entry.relativeDirectory === '.'
-          ? entry.fileName
-          : `${normalizeTreeRelativePath(entry.relativeDirectory)}/${entry.fileName}`;
-
-      return {
-        key: `list-file:${entry.filePath}`,
-        kind: 'file' as const,
-        name: entry.fileName,
-        relativePath,
-        filePath: entry.filePath,
-        documentId: openDocument?.id ?? null,
-        isActive: openDocument?.id === activeDocumentId,
-        isDirty: openDocument ? isDocumentUnsaved(openDocument) : false,
-        isOpen: Boolean(openDocument),
-        isExpanded: false,
-        hasChildren: false,
-        depth: 0
-      };
-    });
-  const rows: FileTreeRow[] = [...folderRows, ...fileRows].sort((left, right) =>
-    left.relativePath.localeCompare(right.relativePath, undefined, {
-      numeric: true,
-      sensitivity: 'base'
-    })
-  );
-
-  for (const document of getFilteredUntitledDocuments()) {
-    rows.unshift({
-      key: `list-untitled:${document.id}`,
-      kind: 'file',
-      name: document.fileName,
-      relativePath: `__untitled__/${document.id}`,
-      filePath: null,
-      documentId: document.id,
-      isActive: document.id === activeDocumentId,
-      isDirty: isDocumentUnsaved(document),
-      isOpen: true,
-      isExpanded: false,
-      hasChildren: false,
-      depth: 0
-    });
-  }
-
-  return rows;
+  return [];
 }
 
 function flattenFileTreeRows(node: FileTreeNode, depth = 0): FileTreeRow[] {
@@ -4806,15 +4704,6 @@ function handleFileTreeRowAction(button: HTMLButtonElement): void {
 
     if (filePath) {
       void openDocumentFromPath(filePath, { updateCurrentDirectory: false });
-    }
-    return;
-  }
-
-  if (filesSidebarViewMode === 'list') {
-    const filePath = button.dataset.filePath || '';
-
-    if (filePath) {
-      void setCurrentDirectoryPath(filePath);
     }
     return;
   }
@@ -7392,6 +7281,296 @@ function getSidebarTargetDirectoryPath(target: SidebarContextTarget): string | n
   }
 }
 
+async function promptSidebarCreateMarkdownFile(directoryPath: string): Promise<void> {
+  const fileName = await showRenameDialog({
+    title: '新建文件',
+    description: '输入要创建的 Markdown 文件名。',
+    defaultValue: 'untitled.md',
+    confirmText: '创建',
+    normalizeValue: async (value) =>
+      await invoke<string>('validate_markdown_file_name', {
+        newName: value
+      })
+  });
+
+  if (!fileName) {
+    return;
+  }
+
+  try {
+    const created = await invoke<OpenedDocument>('create_markdown_file_in_directory', {
+      directoryPath,
+      fileName
+    });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    await openDocumentFromPath(created.filePath, {
+      reloadExisting: true,
+      updateCurrentDirectory: false
+    });
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '创建文件失败。'), true);
+  }
+}
+
+async function promptSidebarCreateFolder(directoryPath: string): Promise<void> {
+  const folderName = await showRenameDialog({
+    title: '新建文件夹',
+    description: '输入要创建的文件夹名称。',
+    defaultValue: '新建文件夹',
+    confirmText: '创建',
+    normalizeValue: async (value) => value
+  });
+
+  if (!folderName) {
+    return;
+  }
+
+  try {
+    const created = await invoke<PathEntryPayload>('create_folder_in_directory', {
+      directoryPath,
+      folderName
+    });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    showHeaderNotice(`已创建文件夹：${created.name}`);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '创建文件夹失败。'), true);
+  }
+}
+
+async function duplicateSidebarEntry(path: string): Promise<void> {
+  try {
+    const duplicated = await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    showHeaderNotice(`已创建副本：${duplicated.name}`);
+
+    if (!duplicated.isDirectory) {
+      await openDocumentFromPath(duplicated.path, {
+        reloadExisting: true,
+        updateCurrentDirectory: false
+      });
+    }
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '创建副本失败。'), true);
+  }
+}
+
+async function deleteSidebarEntry(path: string): Promise<void> {
+  const openDocuments = getOpenDocumentsWithinPath(path);
+
+  if (openDocuments.some((document) => isDocumentUnsaved(document))) {
+    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
+    return;
+  }
+
+  const itemName = getFileNameFromPath(path);
+  const extraNote =
+    openDocuments.length > 0 ? `\n\n相关已打开文档会先关闭：${openDocuments.length} 个。` : '';
+  const shouldDelete = await showDeleteConfirmDialog({
+    title: '确认删除',
+    description: `确定将“${itemName}”移到回收站吗？${extraNote}`,
+    confirmText: '删除'
+  });
+
+  if (!shouldDelete) {
+    return;
+  }
+
+  for (const document of openDocuments) {
+    await closeDocument(document.id);
+  }
+
+  try {
+    await invoke('move_path_to_recycle_bin', { path });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '删除失败。'), true);
+  }
+}
+
+async function renameSidebarFileEntry(
+  target: Extract<SidebarContextTarget, { kind: 'file' }>
+): Promise<void> {
+  const renameResult = await showRenameDialog({
+    title: '重命名文件',
+    description: '修改当前文件名称。',
+    defaultValue: target.fileName,
+    confirmText: '重命名',
+    normalizeValue: async (value) =>
+      await invoke<string>('validate_markdown_file_name', {
+        newName: value
+      })
+  });
+
+  if (!renameResult) {
+    return;
+  }
+
+  try {
+    const renamed = await invoke<OpenedDocument>('rename_markdown_file', {
+      path: target.filePath,
+      newName: renameResult
+    });
+    const openDocument = documents.find((document) => document.filePath === target.filePath);
+
+    if (openDocument) {
+      applyRenamedDocumentState(openDocument, renamed);
+    }
+
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    renderDocumentHeader();
+    requestSidebarRefreshForCurrentMode();
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '重命名失败。'), true);
+  }
+}
+
+async function renameSidebarFolderEntry(
+  target: Extract<SidebarContextTarget, { kind: 'folder' }>
+): Promise<void> {
+  const renameResult = await showRenameDialog({
+    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
+    description: '修改当前文件夹名称。',
+    defaultValue: target.name,
+    confirmText: '重命名',
+    normalizeValue: async (value) => value
+  });
+
+  if (!renameResult) {
+    return;
+  }
+
+  try {
+    const renamed = await invoke<RenamedDirectoryPayload>('rename_directory', {
+      path: target.path,
+      newName: renameResult
+    });
+    updateDocumentsAfterDirectoryRename(renamed.oldPath, renamed.newPath);
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    renderDocumentHeader();
+    requestSidebarRefreshForCurrentMode();
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '重命名文件夹失败。'), true);
+  }
+}
+
+function buildPrimarySidebarContextMenuItems(target: SidebarContextTarget): ContextMenuItem[] {
+  const refreshItem: ContextMenuItem = {
+    kind: 'item',
+    label: '刷新',
+    enabled: Boolean(currentDirectoryPath),
+    action: async () => {
+      if (currentDirectoryPath) {
+        await refreshCurrentDirectoryFiles(currentDirectoryPath);
+      }
+    }
+  };
+
+  const directoryPath = getSidebarTargetDirectoryPath(target);
+  const filePath =
+    target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
+
+  const items: ContextMenuItem[] = [
+    {
+      kind: 'item',
+      label: '新建文件',
+      enabled: Boolean(directoryPath),
+      action: async () => {
+        if (directoryPath) {
+          await promptSidebarCreateMarkdownFile(directoryPath);
+        }
+      }
+    },
+    {
+      kind: 'item',
+      label: '新建文件夹',
+      enabled: Boolean(directoryPath),
+      action: async () => {
+        if (directoryPath) {
+          await promptSidebarCreateFolder(directoryPath);
+        }
+      }
+    },
+    { kind: 'separator' },
+    { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
+    refreshItem
+  ];
+
+  if (target.kind !== 'blank') {
+    items.push(
+      { kind: 'separator' },
+      {
+        kind: 'item',
+        label: '重命名',
+        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
+        action: async () => {
+          if (target.kind === 'file') {
+            if (!target.filePath && target.documentId) {
+              await activateDocument(target.documentId);
+              await handleRenameRequest();
+              return;
+            }
+
+            await renameSidebarFileEntry(target);
+            return;
+          }
+
+          await renameSidebarFolderEntry(target);
+        }
+      },
+      {
+        kind: 'item',
+        label: '创建副本',
+        enabled: Boolean(filePath),
+        action: async () => {
+          if (filePath) {
+            await duplicateSidebarEntry(filePath);
+          }
+        }
+      },
+      {
+        kind: 'item',
+        label: '删除',
+        danger: true,
+        enabled:
+          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
+          !(target.kind === 'folder' && target.isRoot),
+        action: async () => {
+          if (target.kind === 'file' && !target.filePath && target.documentId) {
+            await closeDocument(target.documentId);
+            return;
+          }
+
+          if (filePath) {
+            await deleteSidebarEntry(filePath);
+          }
+        }
+      },
+      {
+        kind: 'item',
+        label: '复制文件路径',
+        enabled: Boolean(filePath),
+        action: async () => {
+          if (filePath) {
+            await copyTextToClipboard(filePath, '已复制文件路径。');
+          }
+        }
+      },
+      {
+        kind: 'item',
+        label: '打开文件位置',
+        enabled: Boolean(filePath),
+        action: async () => {
+          if (filePath) {
+            await revealPath(filePath);
+          }
+        }
+      }
+    );
+  }
+
+  return items;
+}
+
 async function promptCreateMarkdownFile(directoryPath: string): Promise<void> {
   const fileName = await showRenameDialog({
     title: '新建文件',
@@ -7688,26 +7867,7 @@ function resolveSidebarContextTarget(target: EventTarget | null): SidebarContext
 }
 
 function buildSidebarViewModeItems(): ContextMenuItem[] {
-  return [
-    {
-      kind: 'item',
-      label: '文档列表',
-      checked: filesSidebarViewMode === 'list',
-      action: () => {
-        setSidebarMode(FILES_MODE);
-        setFilesSidebarViewMode('list');
-      }
-    },
-    {
-      kind: 'item',
-      label: '文档树',
-      checked: filesSidebarViewMode === 'tree',
-      action: () => {
-        setSidebarMode(FILES_MODE);
-        setFilesSidebarViewMode('tree');
-      }
-    }
-  ];
+  return [];
 }
 
 function buildSidebarContextMenuItems(target: SidebarContextTarget): ContextMenuItem[] {
@@ -7962,7 +8122,14 @@ function buildEditorContextMenuItems(): ContextMenuItem[] {
 function handleSidebarContextMenu(event: MouseEvent): void {
   event.preventDefault();
   const target = resolveSidebarContextTarget(event.target);
-  openContextMenu(buildSidebarContextMenuItemsCurrent(target), event.clientX, event.clientY);
+  openContextMenu(buildPrimarySidebarContextMenuItems(target), event.clientX, event.clientY);
+}
+
+function handleOutlineContextMenu(event: MouseEvent): void {
+  event.preventDefault();
+  if (contextMenuOpen) {
+    closeContextMenu();
+  }
 }
 
 function handleEditorContextMenu(event: MouseEvent): void {
@@ -7974,7 +8141,7 @@ function handleEditorContextMenu(event: MouseEvent): void {
     updateSourceContextMenuSelection();
   }
 
-  openContextMenu(buildEditorContextMenuItemsFinal(), event.clientX, event.clientY);
+  openContextMenu(buildEditorContextMenuItems(), event.clientX, event.clientY);
 }
 
 function buildSidebarContextMenuItemsCurrent(target: SidebarContextTarget): ContextMenuItem[] {
