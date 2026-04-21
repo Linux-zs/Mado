@@ -1454,6 +1454,77 @@ function getSourceHistoryForDocument(document: DocumentState | null): SourceHist
   return getSourceHistoryState(document.id, document.content);
 }
 
+type CommandExecutor = (
+  state: EditorView['state'],
+  dispatch?: ((tr: EditorView['state']['tr']) => void) | undefined,
+  view?: EditorView
+) => boolean;
+
+type CommandFactory = (payload?: unknown) => CommandExecutor;
+
+function canExecuteEditorCommandWithActiveSession(
+  checker: (ctx: MilkdownCtxAccessor, view: EditorView, activeDocument: DocumentState) => boolean
+): boolean {
+  const activeDocument = getActiveDocument();
+  const session = getActiveMilkdownSession();
+
+  if (!activeDocument || !session || milkdownDocumentId !== activeDocument.id) {
+    return false;
+  }
+
+  return session.editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx);
+    return checker(ctx as MilkdownCtxAccessor, view, activeDocument);
+  });
+}
+
+function canExecuteRegisteredMilkdownCommand<T>(
+  command: MilkdownCommandKey<T>,
+  payload?: T
+): boolean {
+  return canExecuteEditorCommandWithActiveSession((ctx, view) => {
+    const commands = ctx.get<{ get: (slice: unknown) => CommandFactory }>(commandsCtx);
+    const commandFactory = commands.get(command.key);
+    const proseCommand = payload === undefined ? commandFactory() : commandFactory(payload);
+    return proseCommand(view.state, undefined, view);
+  });
+}
+
+function canSetSelectionBlockType(nextBlock: 'paragraph' | (1 | 2 | 3 | 4 | 5 | 6)): boolean {
+  return canExecuteEditorCommandWithActiveSession((_ctx, view) => {
+    const { selection, schema } = view.state;
+    const tr = view.state.tr;
+
+    if (nextBlock === 'paragraph') {
+      const paragraphType = schema.nodes.paragraph;
+
+      if (!paragraphType) {
+        return false;
+      }
+
+      try {
+        tr.setBlockType(selection.from, selection.to, paragraphType);
+      } catch {
+        return false;
+      }
+    } else {
+      const headingType = schema.nodes.heading;
+
+      if (!headingType) {
+        return false;
+      }
+
+      try {
+        tr.setBlockType(selection.from, selection.to, headingType, { level: nextBlock });
+      } catch {
+        return false;
+      }
+    }
+
+    return tr.docChanged;
+  });
+}
+
 function readCurrentEditorCommandContext(): EditorCommandContext {
   const activeDocument = getActiveDocument();
 
@@ -1548,6 +1619,35 @@ function isEditorCommandCurrentlyEnabled(
 
   if (TABLE_CONTEXT_COMMAND_IDS.has(commandId)) {
     return context.isInTable;
+  }
+
+  switch (commandId) {
+    case EDITOR_COMMAND_IDS.paragraph:
+      return canSetSelectionBlockType('paragraph');
+    case EDITOR_COMMAND_IDS.heading1:
+      return canSetSelectionBlockType(1);
+    case EDITOR_COMMAND_IDS.heading2:
+      return canSetSelectionBlockType(2);
+    case EDITOR_COMMAND_IDS.heading3:
+      return canSetSelectionBlockType(3);
+    case EDITOR_COMMAND_IDS.heading4:
+      return canSetSelectionBlockType(4);
+    case EDITOR_COMMAND_IDS.heading5:
+      return canSetSelectionBlockType(5);
+    case EDITOR_COMMAND_IDS.heading6:
+      return canSetSelectionBlockType(6);
+    case EDITOR_COMMAND_IDS.blockquote:
+      return canExecuteRegisteredMilkdownCommand(wrapInBlockquoteCommand);
+    case EDITOR_COMMAND_IDS.orderedList:
+      return canExecuteRegisteredMilkdownCommand(wrapInOrderedListCommand);
+    case EDITOR_COMMAND_IDS.bulletList:
+      return canExecuteRegisteredMilkdownCommand(wrapInBulletListCommand);
+    case EDITOR_COMMAND_IDS.codeBlock:
+      return canExecuteRegisteredMilkdownCommand(createCodeBlockCommand);
+    case EDITOR_COMMAND_IDS.tableInsert:
+      return canExecuteRegisteredMilkdownCommand(insertTableCommand);
+    default:
+      break;
   }
 
   return true;
@@ -6072,7 +6172,7 @@ function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
     return false;
   }
 
-  if (element.closest('.milkdown-host')) {
+  if (element === sourceTextarea || element.closest('.milkdown-host')) {
     return false;
   }
 
@@ -6402,6 +6502,10 @@ function getEditorCommandUnavailableMessage(commandId: EditorCommandId): string 
 
   if (TABLE_CONTEXT_COMMAND_IDS.has(commandId) && !context.isInTable) {
     return '\u8bf7\u5148\u5c06\u5149\u6807\u653e\u5728\u8868\u683c\u4e2d\uff0c\u518d\u6267\u884c\u8be5\u8868\u683c\u64cd\u4f5c\u3002';
+  }
+
+  if (!isEditorCommandCurrentlyEnabled(commandId, context)) {
+    return '\u5f53\u524d\u4e0a\u4e0b\u6587\u65e0\u6cd5\u6267\u884c\u8be5\u64cd\u4f5c\u3002';
   }
 
   return null;
@@ -9629,6 +9733,9 @@ function setRenameDialogValidationState(pending: boolean): void {
 }
 
 async function validateSelectedSavePath(filePath: string): Promise<string | null> {
+  return await validateMarkdownSavePath(filePath);
+
+  /*
   try {
     return await invoke<string>('validate_markdown_save_path', {
       path: filePath
@@ -9640,9 +9747,13 @@ async function validateSelectedSavePath(filePath: string): Promise<string | null
     );
     return null;
   }
+  */
 }
 
 async function validateSavePathFromDialog(filePath: string): Promise<string | null> {
+  return await validateMarkdownSavePath(filePath);
+
+  /*
   try {
     return await invoke<string>('validate_markdown_save_path', {
       path: filePath
@@ -9654,6 +9765,7 @@ async function validateSavePathFromDialog(filePath: string): Promise<string | nu
     );
     return null;
   }
+  */
 }
 
 async function submitRenameDialog(): Promise<void> {
@@ -9821,7 +9933,7 @@ async function pickSavePath(defaultPath: string): Promise<string | null> {
     return null;
   }
 
-  return validateSavePathFromDialog(selected);
+  return validateMarkdownSavePath(selected);
 }
 
 async function handleOpenFileRequest(): Promise<void> {
