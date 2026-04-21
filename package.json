@@ -19,7 +19,8 @@
     "build": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri build",
     "build:web": "vite build",
     "preview:web": "vite preview",
-    "test": "tsc --noEmit"
+    "test": "tsc --noEmit && npm run test:logic",
+    "test:logic": "tsc -p tsconfig.test.json && node --test tests/find-replace-state.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.10.1",

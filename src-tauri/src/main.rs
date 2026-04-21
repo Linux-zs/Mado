@@ -1862,5 +1862,17 @@ mod tests {
       app_command_for_menu_id(MENU_EDIT_UNDO_ID),
       Some(AppCommandPayload::EditCommand { command_id }) if command_id == "undo"
     ));
+
+    assert!(matches!(
+      app_command_for_menu_id(MENU_EDIT_FIND_ID),
+      Some(AppCommandPayload::EditCommand { command_id }) if command_id == "find"
+    ));
+
+    assert!(matches!(
+      app_command_for_menu_id(MENU_EDIT_REPLACE_ID),
+      Some(AppCommandPayload::EditCommand { command_id }) if command_id == "replace"
+    ));
+
+    assert!(app_command_for_menu_id("missing-menu-id").is_none());
   }
 }

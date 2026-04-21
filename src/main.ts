@@ -49,6 +49,10 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
+import {
+  computeFindMatchActiveIndex,
+  getFindMatchStart
+} from './find-replace-state';
 import { extendInlineHtmlRemarkHandlers, madoInlineHtmlSupport } from './milkdown-inline-html';
 import './style.css';
 
@@ -1260,6 +1264,13 @@ window.addEventListener('keydown', handleGlobalFileShortcut, true);
 window.addEventListener('keydown', handleGlobalEditShortcut, true);
 window.addEventListener('keydown', handleGlobalEditorShortcut, true);
 
+if (import.meta.env.DEV) {
+  console.assert(
+    !isBlockingGlobalShortcutTarget(sourceTextarea),
+    'Source editor must not block global file shortcuts.'
+  );
+}
+
 workspaceResizeHandle.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) {
     return;
@@ -2108,61 +2119,6 @@ function getActiveFindMatch(): FindMatch | null {
   return findReplaceMatches[findReplaceActiveIndex] ?? null;
 }
 
-function getFindMatchStart(match: FindMatch): number {
-  return match.kind === 'source' ? match.start : match.from;
-}
-
-function getFindMatchEnd(match: FindMatch): number {
-  return match.kind === 'source' ? match.end : match.to;
-}
-
-function findFindMatchIndex(matches: FindMatch[], target: FindMatch): number {
-  if (target.kind === 'source') {
-    return matches.findIndex(
-      (candidate) =>
-        candidate.kind === 'source' &&
-        candidate.start === target.start &&
-        candidate.end === target.end
-    );
-  }
-
-  return matches.findIndex((candidate) => {
-    return candidate.kind === 'rendered' && candidate.from === target.from && candidate.to === target.to;
-  });
-}
-
-function findNearestFindMatchIndex(
-  matches: FindMatch[],
-  anchorPosition: number,
-  direction: -1 | 1
-): number {
-  if (matches.length === 0) {
-    return -1;
-  }
-
-  if (direction < 0) {
-    for (let index = matches.length - 1; index >= 0; index -= 1) {
-      const match = matches[index]!;
-
-      if (getFindMatchEnd(match) <= anchorPosition) {
-        return index;
-      }
-    }
-
-    return matches.length - 1;
-  }
-
-  for (let index = 0; index < matches.length; index += 1) {
-    const match = matches[index]!;
-
-    if (getFindMatchStart(match) >= anchorPosition) {
-      return index;
-    }
-  }
-
-  return matches.length - 1;
-}
-
 type RecomputeFindReplaceOptions = {
   resetActive?: boolean;
   anchorMatch?: FindMatch | null;
@@ -2223,45 +2179,13 @@ function recomputeFindReplaceMatches(options: RecomputeFindReplaceOptions = {}):
   const previousActiveMatch =
     options.anchorMatch === undefined ? getActiveFindMatch() : options.anchorMatch;
   findReplaceMatches = editorViewMode === 'source' ? getSourceFindMatches(query) : getRenderedFindMatches(query);
-
-  if (findReplaceMatches.length === 0) {
-    findReplaceActiveIndex = -1;
-    return;
-  }
-
-  if (options.resetActive) {
-    findReplaceActiveIndex = 0;
-    return;
-  }
-
-  if (previousActiveMatch) {
-    const exactMatchIndex = findFindMatchIndex(findReplaceMatches, previousActiveMatch);
-
-    if (exactMatchIndex >= 0) {
-      findReplaceActiveIndex = exactMatchIndex;
-      return;
-    }
-  }
-
-  const anchorPosition =
-    options.anchorPosition ??
-    (previousActiveMatch ? getFindMatchStart(previousActiveMatch) : null);
-
-  if (anchorPosition !== null) {
-    findReplaceActiveIndex = findNearestFindMatchIndex(
-      findReplaceMatches,
-      anchorPosition,
-      options.direction ?? 1
-    );
-    return;
-  }
-
-  if (previousActiveIndex >= 0) {
-    findReplaceActiveIndex = Math.min(previousActiveIndex, findReplaceMatches.length - 1);
-    return;
-  }
-
-  findReplaceActiveIndex = 0;
+  findReplaceActiveIndex = computeFindMatchActiveIndex(findReplaceMatches, {
+    resetActive: options.resetActive,
+    previousActiveIndex,
+    previousActiveMatch,
+    anchorPosition: options.anchorPosition,
+    direction: options.direction
+  });
 }
 
 function renderFindReplaceBar(): void {
