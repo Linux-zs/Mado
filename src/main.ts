@@ -344,10 +344,16 @@ type FindMatch =
       start: number;
       end: number;
     };
+type SourceHistorySnapshot = {
+  content: string;
+  selectionStart: number;
+  selectionEnd: number;
+  scrollTop: number;
+};
 type SourceHistoryState = {
-  snapshot: string;
-  undoStack: string[];
-  redoStack: string[];
+  snapshot: SourceHistorySnapshot;
+  undoStack: SourceHistorySnapshot[];
+  redoStack: SourceHistorySnapshot[];
 };
 type HighlightJsLanguageDefinition = unknown;
 type HighlightJsModule = {
@@ -1462,7 +1468,7 @@ function getSourceHistoryForDocument(document: DocumentState | null): SourceHist
     return null;
   }
 
-  return getSourceHistoryState(document.id, document.content);
+  return getSourceHistoryState(document.id, createSourceHistorySnapshotFromDocument(document));
 }
 
 type CommandExecutor = (
@@ -1700,12 +1706,54 @@ function scheduleNativeMenuStateSync(): void {
   }, NATIVE_MENU_STATE_SYNC_DELAY_MS);
 }
 
-function getSourceHistoryState(documentId: string, initialContent: string): SourceHistoryState {
+function createSourceHistorySnapshot(
+  content: string,
+  options: {
+    selectionStart?: number;
+    selectionEnd?: number;
+    scrollTop?: number;
+  } = {}
+): SourceHistorySnapshot {
+  const selectionStart = Math.max(0, options.selectionStart ?? 0);
+  const selectionEnd = Math.max(selectionStart, options.selectionEnd ?? selectionStart);
+
+  return {
+    content,
+    selectionStart,
+    selectionEnd,
+    scrollTop: Math.max(0, options.scrollTop ?? 0)
+  };
+}
+
+function createSourceHistorySnapshotFromDocument(document: DocumentState): SourceHistorySnapshot {
+  return createSourceHistorySnapshot(document.content, {
+    selectionStart: document.sourceSelectionStart,
+    selectionEnd: document.sourceSelectionEnd,
+    scrollTop: document.sourceScrollTop
+  });
+}
+
+function createSourceHistorySnapshotFromEditor(content: string = sourceTextarea.value): SourceHistorySnapshot {
+  return createSourceHistorySnapshot(content, {
+    selectionStart: sourceTextarea.selectionStart,
+    selectionEnd: sourceTextarea.selectionEnd,
+    scrollTop: sourceTextarea.scrollTop
+  });
+}
+
+function getSourceHistoryState(
+  documentId: string,
+  initialSnapshot: string | SourceHistorySnapshot
+): SourceHistoryState {
   let state = sourceHistoryByDocument.get(documentId);
 
   if (!state) {
+    const snapshot =
+      typeof initialSnapshot === 'string'
+        ? createSourceHistorySnapshot(initialSnapshot)
+        : initialSnapshot;
     state = {
-      snapshot: initialContent,
+      snapshot,
       undoStack: [],
       redoStack: []
     };
@@ -1718,10 +1766,26 @@ function getSourceHistoryState(documentId: string, initialContent: string): Sour
 function setSourceHistorySnapshot(
   documentId: string,
   content: string,
-  options: { resetStacks?: boolean } = {}
+  options: {
+    resetStacks?: boolean;
+    selectionStart?: number;
+    selectionEnd?: number;
+    scrollTop?: number;
+  } = {}
 ): void {
-  const state = getSourceHistoryState(documentId, content);
-  state.snapshot = content;
+  const state = getSourceHistoryState(
+    documentId,
+    createSourceHistorySnapshot(content, {
+      selectionStart: options.selectionStart,
+      selectionEnd: options.selectionEnd,
+      scrollTop: options.scrollTop
+    })
+  );
+  state.snapshot = createSourceHistorySnapshot(content, {
+    selectionStart: options.selectionStart ?? state.snapshot.selectionStart,
+    selectionEnd: options.selectionEnd ?? state.snapshot.selectionEnd,
+    scrollTop: options.scrollTop ?? state.snapshot.scrollTop
+  });
 
   if (options.resetStacks) {
     state.undoStack = [];
@@ -1729,16 +1793,16 @@ function setSourceHistorySnapshot(
   }
 }
 
-function pushSourceUndoSnapshot(state: SourceHistoryState, content: string): void {
-  state.undoStack.push(content);
+function pushSourceUndoSnapshot(state: SourceHistoryState, snapshot: SourceHistorySnapshot): void {
+  state.undoStack.push(snapshot);
 
   if (state.undoStack.length > SOURCE_HISTORY_LIMIT) {
     state.undoStack.shift();
   }
 }
 
-function pushSourceRedoSnapshot(state: SourceHistoryState, content: string): void {
-  state.redoStack.push(content);
+function pushSourceRedoSnapshot(state: SourceHistoryState, snapshot: SourceHistorySnapshot): void {
+  state.redoStack.push(snapshot);
 
   if (state.redoStack.length > SOURCE_HISTORY_LIMIT) {
     state.redoStack.shift();
@@ -1749,6 +1813,12 @@ function rememberSourceEditorContext(document: DocumentState): void {
   document.sourceSelectionStart = sourceTextarea.selectionStart;
   document.sourceSelectionEnd = sourceTextarea.selectionEnd;
   document.sourceScrollTop = sourceTextarea.scrollTop;
+
+  const state = sourceHistoryByDocument.get(document.id);
+
+  if (state && state.snapshot.content === document.content) {
+    state.snapshot = createSourceHistorySnapshotFromEditor(document.content);
+  }
 }
 
 function applySourceDocumentChange(
@@ -1766,18 +1836,17 @@ function applySourceDocumentChange(
     return false;
   }
 
-  const state = getSourceHistoryState(activeDocument.id, activeDocument.content);
+  const state = getSourceHistoryState(activeDocument.id, createSourceHistorySnapshotFromDocument(activeDocument));
   const previousSelectionStart = sourceTextarea.selectionStart;
   const previousSelectionEnd = sourceTextarea.selectionEnd;
   const previousScrollTop = sourceTextarea.scrollTop;
 
-  if (options.recordUndo && state.snapshot !== nextContent) {
+  if (options.recordUndo && state.snapshot.content !== nextContent) {
     pushSourceUndoSnapshot(state, state.snapshot);
     state.redoStack = [];
   }
 
   sourceTextarea.value = nextContent;
-  state.snapshot = nextContent;
   sourceTextarea.selectionStart = Math.min(
     options.selectionStart ?? previousSelectionStart,
     sourceTextarea.value.length
@@ -1788,6 +1857,7 @@ function applySourceDocumentChange(
   );
   sourceTextarea.scrollTop = options.scrollTop ?? previousScrollTop;
   syncSourceEditorDocumentState(activeDocument);
+  state.snapshot = createSourceHistorySnapshotFromEditor(nextContent);
   rememberSourceEditorContext(activeDocument);
   renderDocumentHeader();
   sourceTextarea.focus();
@@ -1795,15 +1865,15 @@ function applySourceDocumentChange(
 }
 
 function recordSourceInputHistory(document: DocumentState, nextContent: string): void {
-  const state = getSourceHistoryState(document.id, document.content);
+  const state = getSourceHistoryState(document.id, createSourceHistorySnapshotFromDocument(document));
 
-  if (state.snapshot === nextContent) {
+  if (state.snapshot.content === nextContent) {
     return;
   }
 
   pushSourceUndoSnapshot(state, state.snapshot);
   state.redoStack = [];
-  state.snapshot = nextContent;
+  state.snapshot = createSourceHistorySnapshotFromEditor(nextContent);
 }
 
 function renderStatusBar(): void {
@@ -1974,10 +2044,81 @@ function updateRenderedContextMenuSelection(event: MouseEvent): void {
   }
 }
 
-function updateSourceContextMenuSelection(): void {
+function getSourceEditorOffsetFromPoint(event: MouseEvent): number | null {
+  const rect = sourceTextarea.getBoundingClientRect();
+
+  if (
+    event.clientX < rect.left ||
+    event.clientX > rect.right ||
+    event.clientY < rect.top ||
+    event.clientY > rect.bottom
+  ) {
+    return null;
+  }
+
+  const style = window.getComputedStyle(sourceTextarea);
+  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+  const lineHeight =
+    Number.parseFloat(style.lineHeight) ||
+    Number.parseFloat(style.fontSize) * 1.72 ||
+    22;
+  const innerX = Math.max(0, event.clientX - rect.left - paddingLeft + sourceTextarea.scrollLeft);
+  const innerY = Math.max(0, event.clientY - rect.top - paddingTop + sourceTextarea.scrollTop);
+  const lines = sourceTextarea.value.split('\n');
+  const lineIndex = Math.min(
+    Math.max(Math.floor(innerY / lineHeight), 0),
+    Math.max(lines.length - 1, 0)
+  );
+  const lineText = lines[lineIndex] ?? '';
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    return null;
+  }
+
+  context.font = style.font;
+  let column = 0;
+  let measuredWidth = 0;
+
+  for (let index = 0; index < lineText.length; index += 1) {
+    const charWidth = context.measureText(lineText[index] ?? '').width;
+
+    if (innerX <= measuredWidth + charWidth / 2) {
+      column = index;
+      break;
+    }
+
+    measuredWidth += charWidth;
+    column = index + 1;
+  }
+
+  let offset = 0;
+
+  for (let index = 0; index < lineIndex; index += 1) {
+    offset += (lines[index] ?? '').length + 1;
+  }
+
+  return Math.min(offset + column, sourceTextarea.value.length);
+}
+
+function updateSourceContextMenuSelection(event: MouseEvent): void {
   const activeDocument = getActiveDocument();
+  const offset = getSourceEditorOffsetFromPoint(event);
 
   sourceTextarea.focus();
+
+  if (offset !== null) {
+    const selectionStart = sourceTextarea.selectionStart;
+    const selectionEnd = sourceTextarea.selectionEnd;
+    const isWithinSelection =
+      selectionEnd > selectionStart && offset >= selectionStart && offset <= selectionEnd;
+
+    if (!isWithinSelection) {
+      sourceTextarea.setSelectionRange(offset, offset);
+    }
+  }
 
   if (activeDocument && editorViewMode === 'source') {
     rememberSourceEditorContext(activeDocument);
@@ -6306,27 +6447,38 @@ function executeSourceEditCommand(commandId: Extract<EditCommandId, 'undo' | 're
     return false;
   }
 
-  const state = getSourceHistoryState(activeDocument.id, sourceTextarea.value);
+  const state = getSourceHistoryState(
+    activeDocument.id,
+    createSourceHistorySnapshotFromDocument(activeDocument)
+  );
 
   if (commandId === 'undo') {
-    const nextContent = state.undoStack.pop();
+    const nextSnapshot = state.undoStack.pop();
 
-    if (nextContent === undefined) {
+    if (nextSnapshot === undefined) {
       return false;
     }
 
     state.redoStack.push(state.snapshot);
-    return applySourceDocumentChange(nextContent);
+    return applySourceDocumentChange(nextSnapshot.content, {
+      selectionStart: nextSnapshot.selectionStart,
+      selectionEnd: nextSnapshot.selectionEnd,
+      scrollTop: nextSnapshot.scrollTop
+    });
   }
 
-  const nextContent = state.redoStack.pop();
+  const nextSnapshot = state.redoStack.pop();
 
-  if (nextContent === undefined) {
+  if (nextSnapshot === undefined) {
     return false;
   }
 
   pushSourceUndoSnapshot(state, state.snapshot);
-  return applySourceDocumentChange(nextContent);
+  return applySourceDocumentChange(nextSnapshot.content, {
+    selectionStart: nextSnapshot.selectionStart,
+    selectionEnd: nextSnapshot.selectionEnd,
+    scrollTop: nextSnapshot.scrollTop
+  });
 }
 
 function executeEditCommand(commandId: EditCommandId): boolean {
@@ -8147,10 +8299,428 @@ function buildEditorContextMenuItems(): ContextMenuItem[] {
   return items;
 }
 
+async function performActiveEditorPaste(): Promise<void> {
+  let text = '';
+
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    showHeaderNotice('无法读取剪贴板。', true);
+    return;
+  }
+
+  if (!text) {
+    return;
+  }
+
+  if (editorViewMode === 'source') {
+    const start = sourceTextarea.selectionStart;
+    const end = sourceTextarea.selectionEnd;
+    void applySourceDocumentChange(
+      sourceTextarea.value.slice(0, start) + text + sourceTextarea.value.slice(end),
+      {
+        recordUndo: true,
+        selectionStart: start + text.length,
+        selectionEnd: start + text.length,
+        scrollTop: sourceTextarea.scrollTop
+      }
+    );
+    return;
+  }
+
+  executeEditorCommandWithActiveSession((_ctx, view) => {
+    const { from, to } = view.state.selection;
+    view.dispatch(view.state.tr.insertText(text, from, to).scrollIntoView());
+    return true;
+  });
+}
+
+function buildActiveParagraphContextItems(): ContextMenuItem[] {
+  return [
+    { kind: 'item', label: '正文', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.paragraph), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.paragraph) },
+    { kind: 'item', label: '一级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading1), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading1) },
+    { kind: 'item', label: '二级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading2), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading2) },
+    { kind: 'item', label: '三级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading3), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading3) },
+    { kind: 'item', label: '四级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading4), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading4) },
+    { kind: 'item', label: '五级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading5), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading5) },
+    { kind: 'item', label: '六级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading6), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading6) },
+    { kind: 'separator' },
+    { kind: 'item', label: '标题升级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingPromote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingPromote) },
+    { kind: 'item', label: '标题降级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingDemote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingDemote) },
+    { kind: 'separator' },
+    { kind: 'item', label: '引用', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.blockquote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.blockquote) },
+    { kind: 'item', label: '有序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.orderedList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.orderedList) },
+    { kind: 'item', label: '无序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.bulletList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.bulletList) },
+    { kind: 'item', label: '代码块', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.codeBlock), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.codeBlock) },
+    { kind: 'item', label: '插入表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableInsert), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableInsert) }
+  ];
+}
+
+function buildActiveFormatContextItems(): ContextMenuItem[] {
+  return [
+    { kind: 'item', label: '粗体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrong), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrong) },
+    { kind: 'item', label: '斜体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineEmphasis), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineEmphasis) },
+    { kind: 'item', label: '删除线', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrike), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrike) },
+    { kind: 'item', label: '行内代码', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineCode), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineCode) },
+    { kind: 'item', label: '高亮', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
+    { kind: 'item', label: '上标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
+    { kind: 'item', label: '下标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
+    { kind: 'item', label: '按键', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
+  ];
+}
+
+function buildActiveTableContextItems(): ContextMenuItem[] {
+  return [
+    { kind: 'item', label: '上方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowAbove), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowAbove) },
+    { kind: 'item', label: '下方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowBelow), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowBelow) },
+    { kind: 'item', label: '左侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColLeft) },
+    { kind: 'item', label: '右侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColRight) },
+    { kind: 'separator' },
+    { kind: 'item', label: '行上移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowUp), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowUp) },
+    { kind: 'item', label: '行下移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowDown), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowDown) },
+    { kind: 'item', label: '列左移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveLeft) },
+    { kind: 'item', label: '列右移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveRight) },
+    { kind: 'separator' },
+    { kind: 'item', label: '删除行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteRow), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteRow) },
+    { kind: 'item', label: '删除列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteCol), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteCol) },
+    { kind: 'item', label: '删除表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDelete), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDelete) }
+  ];
+}
+
+function buildActiveEditorContextMenuItems(): ContextMenuItem[] {
+  const context = readCurrentEditorCommandContext();
+  const hasSelection =
+    editorViewMode === 'source'
+      ? sourceTextarea.selectionStart !== sourceTextarea.selectionEnd
+      : context.hasSelection;
+  const items: ContextMenuItem[] = [
+    { kind: 'item', label: '撤销', enabled: context.canUndo, action: () => executeEditCommand('undo') },
+    { kind: 'item', label: '恢复', enabled: context.canRedo, action: () => executeEditCommand('redo') },
+    { kind: 'separator' },
+    { kind: 'item', label: '剪切', enabled: hasSelection, action: async () => performEditorCut() },
+    { kind: 'item', label: '复制', enabled: hasSelection, action: async () => performEditorCopy() },
+    { kind: 'item', label: '粘贴', action: async () => performActiveEditorPaste() },
+    { kind: 'item', label: '全选', action: () => performEditorSelectAll() },
+    { kind: 'separator' },
+    { kind: 'item', label: '查找', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('find') },
+    { kind: 'item', label: '替换', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('replace') }
+  ];
+
+  if (editorViewMode === 'rendered') {
+    items.push(
+      { kind: 'separator' },
+      { kind: 'item', label: '段落', submenu: buildActiveParagraphContextItems() },
+      { kind: 'item', label: '格式', submenu: buildActiveFormatContextItems() }
+    );
+
+    if (context.isInTable) {
+      items.push({ kind: 'item', label: '表格', submenu: buildActiveTableContextItems() });
+    }
+  }
+
+  return items;
+}
+
+async function promptCreateMarkdownFileActive(directoryPath: string): Promise<void> {
+  const fileName = await showRenameDialog({
+    title: '新建文件',
+    description: '输入要创建的 Markdown 文件名。',
+    defaultValue: 'untitled.md',
+    confirmText: '创建',
+    normalizeValue: async (value) =>
+      await invoke<string>('validate_markdown_file_name', {
+        newName: value
+      })
+  });
+
+  if (!fileName) {
+    return;
+  }
+
+  try {
+    const created = await invoke<OpenedDocument>('create_markdown_file_in_directory', {
+      directoryPath,
+      fileName
+    });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    await openDocumentFromPath(created.filePath, {
+      reloadExisting: true,
+      updateCurrentDirectory: false
+    });
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '创建文件失败。'), true);
+  }
+}
+
+async function promptCreateFolderActive(directoryPath: string): Promise<void> {
+  const folderName = await showRenameDialog({
+    title: '新建文件夹',
+    description: '输入要创建的文件夹名称。',
+    defaultValue: '新建文件夹',
+    confirmText: '创建',
+    normalizeValue: async (value) => value
+  });
+
+  if (!folderName) {
+    return;
+  }
+
+  try {
+    const created = await invoke<PathEntryPayload>('create_folder_in_directory', {
+      directoryPath,
+      folderName
+    });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    showHeaderNotice(`已创建文件夹：${created.name}`);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '创建文件夹失败。'), true);
+  }
+}
+
+async function duplicateSidebarEntryActive(path: string): Promise<void> {
+  try {
+    const duplicated = await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    showHeaderNotice(`已创建副本：${duplicated.name}`);
+
+    if (!duplicated.isDirectory) {
+      await openDocumentFromPath(duplicated.path, {
+        reloadExisting: true,
+        updateCurrentDirectory: false
+      });
+    }
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '创建副本失败。'), true);
+  }
+}
+
+async function deleteSidebarEntryActive(path: string): Promise<void> {
+  const openDocuments = getOpenDocumentsWithinPath(path);
+
+  if (openDocuments.some((document) => isDocumentUnsaved(document))) {
+    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
+    return;
+  }
+
+  const itemName = getFileNameFromPath(path);
+  const extraNote =
+    openDocuments.length > 0 ? `\n\n相关已打开文档会先关闭，共 ${openDocuments.length} 个。` : '';
+  const shouldDelete = await showDeleteConfirmDialog({
+    title: '确认删除',
+    description: `确定将“${itemName}”移到回收站吗？${extraNote}`,
+    confirmText: '删除'
+  });
+
+  if (!shouldDelete) {
+    return;
+  }
+
+  for (const document of openDocuments) {
+    await closeDocument(document.id);
+  }
+
+  try {
+    await invoke('move_path_to_recycle_bin', { path });
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '删除失败。'), true);
+  }
+}
+
+async function renameSidebarFileEntryActive(
+  target: Extract<SidebarContextTarget, { kind: 'file' }>
+): Promise<void> {
+  const renameResult = await showRenameDialog({
+    title: '重命名文件',
+    description: '修改当前文件名称。',
+    defaultValue: target.fileName,
+    confirmText: '重命名',
+    normalizeValue: async (value) =>
+      await invoke<string>('validate_markdown_file_name', {
+        newName: value
+      })
+  });
+
+  if (!renameResult) {
+    return;
+  }
+
+  try {
+    const renamed = await invoke<OpenedDocument>('rename_markdown_file', {
+      path: target.filePath,
+      newName: renameResult
+    });
+    const openDocument = documents.find((document) => document.filePath === target.filePath);
+
+    if (openDocument) {
+      applyRenamedDocumentState(openDocument, renamed);
+    }
+
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    renderDocumentHeader();
+    requestSidebarRefreshForCurrentMode();
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '重命名失败。'), true);
+  }
+}
+
+async function renameSidebarFolderEntryActive(
+  target: Extract<SidebarContextTarget, { kind: 'folder' }>
+): Promise<void> {
+  const renameResult = await showRenameDialog({
+    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
+    description: '修改当前文件夹名称。',
+    defaultValue: target.name,
+    confirmText: '重命名',
+    normalizeValue: async (value) => value
+  });
+
+  if (!renameResult) {
+    return;
+  }
+
+  try {
+    const renamed = await invoke<RenamedDirectoryPayload>('rename_directory', {
+      path: target.path,
+      newName: renameResult
+    });
+    updateDocumentsAfterDirectoryRename(renamed.oldPath, renamed.newPath);
+    await refreshCurrentDirectoryFiles(currentDirectoryPath);
+    renderDocumentHeader();
+    requestSidebarRefreshForCurrentMode();
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '重命名文件夹失败。'), true);
+  }
+}
+
+function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): ContextMenuItem[] {
+  const refreshItem: ContextMenuItem = {
+    kind: 'item',
+    label: '刷新',
+    enabled: Boolean(currentDirectoryPath),
+    action: async () => {
+      if (currentDirectoryPath) {
+        await refreshCurrentDirectoryFiles(currentDirectoryPath);
+      }
+    }
+  };
+
+  if (target.sidebarMode === OUTLINE_MODE) {
+    return [
+      { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
+      refreshItem
+    ];
+  }
+
+  const directoryPath = getSidebarTargetDirectoryPath(target);
+  const filePath =
+    target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
+  const items: ContextMenuItem[] = [
+    {
+      kind: 'item',
+      label: '新建文件',
+      enabled: Boolean(directoryPath),
+      action: async () => {
+        if (directoryPath) {
+          await promptCreateMarkdownFileActive(directoryPath);
+        }
+      }
+    },
+    {
+      kind: 'item',
+      label: '新建文件夹',
+      enabled: Boolean(directoryPath),
+      action: async () => {
+        if (directoryPath) {
+          await promptCreateFolderActive(directoryPath);
+        }
+      }
+    },
+    { kind: 'separator' },
+    { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
+    refreshItem
+  ];
+
+  if (target.kind !== 'blank') {
+    items.push(
+      { kind: 'separator' },
+      {
+        kind: 'item',
+        label: '重命名',
+        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
+        action: async () => {
+          if (target.kind === 'file') {
+            if (!target.filePath && target.documentId) {
+              await activateDocument(target.documentId);
+              await handleRenameRequest();
+              return;
+            }
+
+            await renameSidebarFileEntryActive(target);
+            return;
+          }
+
+          await renameSidebarFolderEntryActive(target);
+        }
+      },
+      {
+        kind: 'item',
+        label: '创建副本',
+        enabled: Boolean(filePath),
+        action: async () => {
+          if (filePath) {
+            await duplicateSidebarEntryActive(filePath);
+          }
+        }
+      },
+      {
+        kind: 'item',
+        label: '删除',
+        danger: true,
+        enabled:
+          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
+          !(target.kind === 'folder' && target.isRoot),
+        action: async () => {
+          if (target.kind === 'file' && !target.filePath && target.documentId) {
+            await closeDocument(target.documentId);
+            return;
+          }
+
+          if (filePath) {
+            await deleteSidebarEntryActive(filePath);
+          }
+        }
+      },
+      {
+        kind: 'item',
+        label: '复制文件路径',
+        enabled: Boolean(filePath),
+        action: async () => {
+          if (filePath) {
+            await copyTextToClipboard(filePath, '已复制文件路径。');
+          }
+        }
+      },
+      {
+        kind: 'item',
+        label: '打开文件位置',
+        enabled: Boolean(filePath),
+        action: async () => {
+          if (filePath) {
+            await revealPath(filePath);
+          }
+        }
+      }
+    );
+  }
+
+  return items;
+}
+
 function handleSidebarContextMenu(event: MouseEvent): void {
   event.preventDefault();
   const target = resolveSidebarContextTarget(event.target);
-  openContextMenu(buildPrimarySidebarContextMenuItems(target), event.clientX, event.clientY);
+  openContextMenu(buildActiveSidebarContextMenuItems(target), event.clientX, event.clientY);
 }
 
 function handleOutlineContextMenu(event: MouseEvent): void {
@@ -8166,10 +8736,10 @@ function handleEditorContextMenu(event: MouseEvent): void {
   if (editorViewMode === 'rendered') {
     updateRenderedContextMenuSelection(event);
   } else if (event.target === sourceTextarea || event.target instanceof Node) {
-    updateSourceContextMenuSelection();
+    updateSourceContextMenuSelection(event);
   }
 
-  openContextMenu(buildEditorContextMenuItems(), event.clientX, event.clientY);
+  openContextMenu(buildActiveEditorContextMenuItems(), event.clientX, event.clientY);
 }
 
 function buildSidebarContextMenuItemsCurrent(target: SidebarContextTarget): ContextMenuItem[] {
