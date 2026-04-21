@@ -258,6 +258,9 @@ type DeleteConfirmDialogOptions = {
   description: string;
   confirmText: string;
 };
+type DirectoryRefreshOptions = {
+  activationToken?: number;
+};
 type FilesSidebarViewMode = 'list' | 'tree';
 type SidebarSearchState = {
   isVisible: boolean;
@@ -553,6 +556,7 @@ let milkdownHasPendingChanges = false;
 let milkdownActivationToken = 0;
 let milkdownSessionPrepareTokens = new Map<string, number>();
 let milkdownSessions = new Map<string, MilkdownSession>();
+let directoryRefreshToken = 0;
 let activeHeadingMarkerState: ActiveHeadingMarkerState | null = null;
 let headingMarkerOverlay: HTMLDivElement | null = null;
 let headingMarkerBadge: HTMLButtonElement | null = null;
@@ -3352,6 +3356,15 @@ function isCurrentMilkdownActivation(token: number): boolean {
   return token === milkdownActivationToken;
 }
 
+function beginDirectoryRefresh(): number {
+  directoryRefreshToken += 1;
+  return directoryRefreshToken;
+}
+
+function isCurrentDirectoryRefresh(token: number): boolean {
+  return token === directoryRefreshToken;
+}
+
 function beginMilkdownSessionPrepare(documentId: string): number {
   const nextToken = (milkdownSessionPrepareTokens.get(documentId) ?? 0) + 1;
   milkdownSessionPrepareTokens.set(documentId, nextToken);
@@ -4255,19 +4268,19 @@ function scheduleOutlineSidebarRefresh(documentId: string): void {
 
 async function setCurrentDirectoryPath(
   nextDirectoryPath: string | null,
-  activationToken: number = milkdownActivationToken
+  options: DirectoryRefreshOptions = {}
 ): Promise<boolean> {
-  return await refreshCurrentDirectoryFiles(nextDirectoryPath, activationToken);
+  return await refreshCurrentDirectoryFiles(nextDirectoryPath, options);
 }
 
 async function setCurrentDirectoryFromFilePath(
   filePath: string,
-  activationToken: number = milkdownActivationToken
+  options: DirectoryRefreshOptions = {}
 ): Promise<boolean> {
   const parentPath = getParentPathFromFilePath(filePath);
 
   if (parentPath && parentPath !== currentDirectoryPath) {
-    return await setCurrentDirectoryPath(parentPath, activationToken);
+    return await setCurrentDirectoryPath(parentPath, options);
   }
 
   return false;
@@ -4275,9 +4288,11 @@ async function setCurrentDirectoryFromFilePath(
 
 async function refreshCurrentDirectoryFiles(
   nextDirectoryPath: string | null = currentDirectoryPath,
-  activationToken: number = milkdownActivationToken
+  options: DirectoryRefreshOptions = {}
 ): Promise<boolean> {
-  if (!isCurrentMilkdownActivation(activationToken)) {
+  const refreshToken = beginDirectoryRefresh();
+
+  if (options.activationToken !== undefined && !isCurrentMilkdownActivation(options.activationToken)) {
     return false;
   }
 
@@ -4306,7 +4321,11 @@ async function refreshCurrentDirectoryFiles(
       rootPath: nextDirectoryPath
     });
 
-    if (loadToken !== directoryFilesLoadToken || !isCurrentMilkdownActivation(activationToken)) {
+    if (
+      loadToken !== directoryFilesLoadToken ||
+      !isCurrentDirectoryRefresh(refreshToken) ||
+      (options.activationToken !== undefined && !isCurrentMilkdownActivation(options.activationToken))
+    ) {
       return false;
     }
 
@@ -4320,7 +4339,11 @@ async function refreshCurrentDirectoryFiles(
       : null;
     return true;
   } catch {
-    if (loadToken !== directoryFilesLoadToken || !isCurrentMilkdownActivation(activationToken)) {
+    if (
+      loadToken !== directoryFilesLoadToken ||
+      !isCurrentDirectoryRefresh(refreshToken) ||
+      (options.activationToken !== undefined && !isCurrentMilkdownActivation(options.activationToken))
+    ) {
       return false;
     }
 
@@ -9306,7 +9329,7 @@ async function openDocumentFromPath(
     await activateDocument(existingDocument.id, activationToken);
 
     if (updateCurrentDirectory) {
-      await setCurrentDirectoryFromFilePath(filePath, activationToken);
+      await setCurrentDirectoryFromFilePath(filePath, { activationToken });
     }
 
     if (!isCurrentMilkdownActivation(activationToken)) {
@@ -9335,7 +9358,7 @@ async function openDocumentFromPath(
       requestSidebarRefreshForCurrentMode();
 
       if (updateCurrentDirectory) {
-        await setCurrentDirectoryFromFilePath(filePath, activationToken);
+        await setCurrentDirectoryFromFilePath(filePath, { activationToken });
       }
 
       return;
@@ -9363,7 +9386,7 @@ async function openDocumentFromPath(
     activatePreparedDocument(documentState, sessionResult.session, activationToken);
 
     if (updateCurrentDirectory) {
-      await setCurrentDirectoryFromFilePath(filePath, activationToken);
+    await setCurrentDirectoryFromFilePath(filePath, { activationToken });
     }
 
     if (!isCurrentMilkdownActivation(activationToken)) {
@@ -9658,8 +9681,7 @@ async function handleOpenFolderRequest(): Promise<void> {
     return;
   }
 
-  const activationToken = beginMilkdownActivation();
-  await setCurrentDirectoryPath(selected, activationToken);
+  await setCurrentDirectoryPath(selected);
 }
 
 function handleNewFileRequest(): void {
