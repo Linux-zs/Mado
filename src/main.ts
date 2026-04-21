@@ -265,7 +265,6 @@ type DeleteConfirmDialogOptions = {
 type DirectoryRefreshOptions = {
   activationToken?: number;
 };
-type FilesSidebarViewMode = 'list' | 'tree';
 type SidebarSearchState = {
   isVisible: boolean;
   query: string;
@@ -315,16 +314,6 @@ type RenamedDirectoryPayload = {
   newPath: string;
   name: string;
   parentPath: string;
-};
-type PathPropertiesPayload = {
-  name: string;
-  path: string;
-  parentPath: string;
-  itemKind: string;
-  sizeBytes: number | null;
-  modifiedAt: number | null;
-  extension: string | null;
-  isDirectory: boolean;
 };
 type AppCommandSource = 'native-menu' | 'keyboard' | 'ui';
 type EditCommandId = 'undo' | 'redo' | 'find' | 'replace';
@@ -543,7 +532,6 @@ let directoryFilesNotice: string | null = null;
 let directoryFilesLoadToken = 0;
 let sidebarMode: SidebarMode = FILES_MODE;
 let sidebarVisibleMode: SidebarMode = FILES_MODE;
-let filesSidebarViewMode: FilesSidebarViewMode = 'tree';
 let filesSidebarSearchState: SidebarSearchState = {
   isVisible: loadFilesSidebarSearchVisible(),
   query: ''
@@ -610,7 +598,6 @@ let contextSubmenuEntries: ContextMenuItem[] = [];
 let contextMenuAnchorPoint: { x: number; y: number } | null = null;
 let contextSubmenuAnchorElement: HTMLElement | null = null;
 let contextMenuOpen = false;
-let propertiesDialogOpen = false;
 let highlightJsApi: HighlightJsApi | null = null;
 let highlightJsLoadPromise: Promise<HighlightJsApi> | null = null;
 let codeBlockHighlightRefreshFrame: number | null = null;
@@ -989,41 +976,6 @@ renameDialog.append(
 );
 renameOverlay.append(renameDialog);
 
-const propertiesOverlay = document.createElement('div');
-propertiesOverlay.className = 'modal-overlay is-hidden';
-
-const propertiesDialog = document.createElement('section');
-propertiesDialog.className = 'modal-card modal-card-properties';
-propertiesDialog.setAttribute('role', 'dialog');
-propertiesDialog.setAttribute('aria-modal', 'true');
-
-const propertiesDialogTitle = document.createElement('h2');
-propertiesDialogTitle.className = 'modal-title';
-propertiesDialogTitle.textContent = '属性';
-
-const propertiesDialogDescription = document.createElement('p');
-propertiesDialogDescription.className = 'modal-description';
-
-const propertiesDialogBody = document.createElement('dl');
-propertiesDialogBody.className = 'properties-list';
-
-const propertiesDialogActions = document.createElement('div');
-propertiesDialogActions.className = 'modal-actions';
-
-const propertiesDialogClose = document.createElement('button');
-propertiesDialogClose.type = 'button';
-propertiesDialogClose.className = 'modal-button is-primary';
-propertiesDialogClose.textContent = '关闭';
-
-propertiesDialogActions.append(propertiesDialogClose);
-propertiesDialog.append(
-  propertiesDialogTitle,
-  propertiesDialogDescription,
-  propertiesDialogBody,
-  propertiesDialogActions
-);
-propertiesOverlay.append(propertiesDialog);
-
 const deleteConfirmOverlay = document.createElement('div');
 deleteConfirmOverlay.className = 'modal-overlay is-hidden';
 
@@ -1070,7 +1022,7 @@ contextMenuLayer.append(contextMenuPanel, contextSubmenuPanel);
 header.append(fileName, fileHint);
 editorPanel.append(header, findReplaceBar, content, statusBar);
 frame.append(sidebar, workspaceResizeHandle, editorPanel);
-shell.append(frame, contextMenuLayer, renameOverlay, propertiesOverlay, deleteConfirmOverlay);
+shell.append(frame, contextMenuLayer, renameOverlay, deleteConfirmOverlay);
 app.replaceChildren(shell);
 
 applySidebarWidth(sidebarWidth);
@@ -1088,16 +1040,6 @@ renameDialogCancel.addEventListener('click', () => {
 
 renameDialogConfirm.addEventListener('click', () => {
   void submitRenameDialog();
-});
-
-propertiesDialogClose.addEventListener('click', () => {
-  closePropertiesDialog();
-});
-
-propertiesOverlay.addEventListener('click', (event) => {
-  if (event.target === propertiesOverlay) {
-    closePropertiesDialog();
-  }
 });
 
 deleteConfirmCancel.addEventListener('click', () => {
@@ -1358,10 +1300,6 @@ window.addEventListener('keydown', (event) => {
       return;
     }
 
-    if (propertiesDialogOpen) {
-      closePropertiesDialog();
-      event.stopPropagation();
-    }
   }
 });
 
@@ -4284,89 +4222,6 @@ function openFilesSidebarSearch(): void {
   setFilesSidebarSearchVisible(true);
 }
 
-function closePropertiesDialog(): void {
-  propertiesDialogOpen = false;
-  propertiesOverlay.classList.add('is-hidden');
-  propertiesDialogBody.replaceChildren();
-}
-
-function formatPropertyValue(value: string): string {
-  return value.length > 0 ? value : '—';
-}
-
-function formatPropertyTimestamp(value: number | null): string {
-  if (value === null) {
-    return '—';
-  }
-
-  try {
-    return new Intl.DateTimeFormat('zh-CN', {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    }).format(new Date(value * 1000));
-  } catch {
-    return String(value);
-  }
-}
-
-function formatPropertySize(sizeBytes: number | null): string {
-  if (sizeBytes === null) {
-    return '—';
-  }
-
-  if (sizeBytes < 1024) {
-    return `${sizeBytes} B`;
-  }
-
-  if (sizeBytes < 1024 * 1024) {
-    return `${(sizeBytes / 1024).toFixed(1)} KB`;
-  }
-
-  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function showPropertiesDialog(
-  properties: PathPropertiesPayload,
-  options: { isOpen?: boolean; isDirty?: boolean } = {}
-): void {
-  propertiesDialogBody.replaceChildren();
-
-  const entries: Array<[string, string]> = [
-    ['名称', properties.name],
-    ['类型', properties.isDirectory ? '文件夹' : '文件'],
-    ['路径', properties.path],
-    ['所在目录', properties.parentPath],
-    ['扩展名', properties.extension ?? ''],
-    ['大小', formatPropertySize(properties.sizeBytes)],
-    ['修改时间', formatPropertyTimestamp(properties.modifiedAt)]
-  ];
-
-  if (options.isOpen !== undefined) {
-    entries.push(['已打开', options.isOpen ? '是' : '否']);
-  }
-
-  if (options.isDirty !== undefined) {
-    entries.push(['未保存修改', options.isDirty ? '是' : '否']);
-  }
-
-  for (const [label, value] of entries) {
-    const term = document.createElement('dt');
-    term.textContent = label;
-
-    const detail = document.createElement('dd');
-    detail.textContent = formatPropertyValue(value);
-    detail.title = value;
-
-    propertiesDialogBody.append(term, detail);
-  }
-
-  propertiesDialogDescription.textContent = properties.isDirectory
-    ? '当前项目中的文件夹信息。'
-    : '当前项目中的文件信息。';
-  propertiesDialogOpen = true;
-  propertiesOverlay.classList.remove('is-hidden');
-}
-
 function cancelOutlineSidebarRefresh(): void {
   if (outlineSidebarRefreshTimer !== null) {
     window.clearTimeout(outlineSidebarRefreshTimer);
@@ -4520,7 +4375,12 @@ function syncCurrentDirectoryFileEntry(
   return true;
 }
 
-async function closeDocument(documentId: string): Promise<void> {
+async function closeDocument(
+  documentId: string,
+  options: {
+    skipDirtyConfirm?: boolean;
+  } = {}
+): Promise<void> {
   syncActiveDocumentFromEditor();
   closeFindReplaceBar();
 
@@ -4530,7 +4390,7 @@ async function closeDocument(documentId: string): Promise<void> {
     return;
   }
 
-  if (document.isDirty) {
+  if (document.isDirty && !options.skipDirtyConfirm) {
     const shouldDiscard = window.confirm(
       '\u5f53\u524d\u6587\u4ef6\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539\uff0c\u786e\u5b9a\u5173\u95ed\u5e76\u4e22\u5f03\u8fd9\u4e9b\u5185\u5bb9\u5417\uff1f'
     );
@@ -4818,158 +4678,6 @@ function buildFileTreeRoot(
   return root;
 }
 
-function buildFilesSidebarListRows(): FileTreeRow[] {
-  return [];
-}
-
-function flattenFileTreeRows(node: FileTreeNode, depth = 0): FileTreeRow[] {
-  const rows: FileTreeRow[] = [
-    {
-      key: node.key,
-      kind: node.kind,
-      name: node.name,
-      relativePath: node.relativePath,
-      filePath: node.filePath,
-      documentId: node.documentId,
-      isActive: node.isActive,
-      isDirty: node.isDirty,
-      isOpen: node.isOpen,
-      isExpanded: node.isExpanded,
-      hasChildren: node.children.length > 0,
-      depth
-    }
-  ];
-
-  if (!node.isExpanded) {
-    return rows;
-  }
-
-  for (const child of node.children) {
-    rows.push(...flattenFileTreeRows(child, depth + 1));
-  }
-
-  return rows;
-}
-
-function handleFileTreeRowAction(button: HTMLButtonElement): void {
-  const kind = button.dataset.kind as FileTreeNodeKind | undefined;
-
-  if (!kind) {
-    return;
-  }
-
-  if (kind === 'file') {
-    const documentId = button.dataset.documentId || '';
-    const filePath = button.dataset.filePath || '';
-
-    if (documentId) {
-      void activateDocument(documentId);
-      return;
-    }
-
-    if (filePath) {
-      void openDocumentFromPath(filePath, { updateCurrentDirectory: false });
-    }
-    return;
-  }
-
-  const relativePath = button.dataset.relativePath || '';
-  const expanded = button.dataset.expanded === 'true';
-  setStoredFileTreeExpansion(currentDirectoryPath, relativePath, !expanded);
-  requestFilesSidebarRefresh();
-}
-
-function createFileTreeRow(item: FileTreeRow): HTMLElement {
-  const row = document.createElement('button');
-  row.type = 'button';
-  row.className = 'file-tree-row';
-  row.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    event.preventDefault();
-    handleFileTreeRowAction(row);
-  });
-  row.addEventListener('click', (event) => {
-    if (event.detail === 0) {
-      handleFileTreeRowAction(row);
-    }
-  });
-
-  const twisty = document.createElement('span');
-  twisty.className = 'file-tree-twisty';
-  twisty.setAttribute('aria-hidden', 'true');
-
-  const icon = document.createElement('span');
-  icon.className = 'file-tree-icon';
-  icon.setAttribute('aria-hidden', 'true');
-
-  const label = document.createElement('span');
-  label.className = 'file-tree-label';
-
-  const dirtyDot = document.createElement('span');
-  dirtyDot.className = 'file-tree-dirty-dot';
-  dirtyDot.textContent = '\u25CF';
-  dirtyDot.setAttribute('aria-hidden', 'true');
-
-  row.append(twisty, icon, label, dirtyDot);
-  fileTreeRowParts.set(row, {
-    mainButton: row,
-    twisty,
-    icon,
-    label,
-    dirtyDot
-  });
-  syncFileTreeRow(row, item);
-  return row;
-}
-
-function syncFileTreeRow(row: HTMLElement, item: FileTreeRow): void {
-  const parts = fileTreeRowParts.get(row);
-
-  if (!parts) {
-    return;
-  }
-
-  row.dataset.kind = item.kind;
-  row.dataset.relativePath = item.relativePath;
-  row.dataset.filePath = item.filePath ?? '';
-  row.dataset.documentId = item.documentId ?? '';
-  row.dataset.expanded = String(item.isExpanded);
-  row.style.setProperty('--tree-depth', String(item.depth));
-  row.classList.toggle('is-root', item.kind === 'root');
-  row.classList.toggle('is-folder', item.kind === 'folder');
-  row.classList.toggle('is-file', item.kind === 'file');
-  row.classList.toggle('has-children', item.hasChildren);
-  row.classList.toggle('is-expanded', item.isExpanded);
-  row.classList.toggle('is-active', item.isActive);
-  row.classList.toggle('is-open', item.isOpen);
-  row.classList.toggle('is-dirty', item.isDirty);
-  row.classList.toggle('is-hidden-name', item.name.startsWith('.'));
-  row.title = item.name;
-  row.setAttribute('aria-selected', String(item.isActive));
-
-  if (item.kind === 'file') {
-    row.removeAttribute('aria-expanded');
-  } else {
-    row.setAttribute('aria-expanded', String(item.isExpanded));
-  }
-
-  row.setAttribute(
-    'aria-label',
-    item.kind === 'file'
-      ? `${item.name}${item.isDirty ? '\uff0c\u672a\u4fdd\u5b58' : ''}`
-      : `${item.name}${item.isExpanded ? '\uff0c\u5df2\u5c55\u5f00' : '\uff0c\u5df2\u6298\u53e0'}`
-  );
-
-  parts.label.textContent = item.name;
-  parts.twisty.textContent = item.hasChildren ? (item.isExpanded ? '\u25be' : '\u25b8') : '';
-  parts.twisty.classList.toggle('is-placeholder', !item.hasChildren);
-  parts.icon.className = `file-tree-icon is-${item.kind}`;
-  parts.dirtyDot.hidden = item.kind !== 'file' || !item.isDirty;
-}
-
 function renderFilesSidebar(): void {
   filesSidebarSearchBar.classList.toggle('is-hidden', !filesSidebarSearchState.isVisible);
   filesSidebarSearchInput.value = filesSidebarSearchState.query;
@@ -4984,44 +4692,11 @@ function renderFilesSidebar(): void {
     return;
   }
 
-  if (filesSidebarViewMode === 'list') {
-    const rows = buildFilesSidebarListRows();
-
-    if (rows.length === 0) {
-      if (filesSidebarSearchState.query.trim().length > 0) {
-        setFilesSidebarEmptyState('没有匹配的文档。');
-        return;
-      }
-
-      if (!currentDirectoryPath) {
-        setFilesSidebarEmptyState('\u901a\u8fc7 "\u6587\u4ef6 -> \u6253\u5f00\u6587\u4ef6\u5939" \u9009\u62e9\u4e00\u4e2a\u76ee\u5f55\u3002');
-        return;
-      }
-
-      setFilesSidebarEmptyState('\u5f53\u524d\u76ee\u5f55\u4e0b\u6ca1\u6709 .md\u3001.markdown \u6216 .txt \u6587\u4ef6\u3002');
-      return;
-    }
-
-    filesSidebarEmpty.hidden = true;
-    filesSidebarNotice.hidden = !directoryFilesNotice;
-    filesSidebarNotice.textContent = directoryFilesNotice ?? '';
-    filesSidebarList.hidden = false;
-    reconcileKeyedChildren(
-      filesSidebarList,
-      rows,
-      (item) => item.key,
-      createFileTreeRow,
-      syncFileTreeRow,
-      fileTreeRowNodeCache
-    );
-    return;
-  }
-
   const root = buildFileTreeRoot();
 
   if (!root || root.children.length === 0) {
     if (filesSidebarSearchState.query.trim().length > 0) {
-      setFilesSidebarEmptyState('没有匹配的文档。');
+      setFilesSidebarEmptyState('\u6ca1\u6709\u5339\u914d\u7684\u6587\u6863\u3002');
       return;
     }
 
@@ -6160,7 +5835,7 @@ function executeEditorCommand(commandId: string): boolean {
   const handler = editorCommandHandlers.get(typedCommandId);
 
   if (!handler) {
-    showHeaderNotice('\u8be5\u547d\u4ee4\u5f53\u524d\u672a\u5b9e\u73b0\u3002', true);
+    showHeaderNotice('\u590d\u5236\u5931\u8d25\u3002', true);
     return false;
   }
 
@@ -7332,7 +7007,7 @@ function createContextMenuButton(item: Extract<ContextMenuItem, { kind: 'item' }
 
   const meta = document.createElement('span');
   meta.className = 'context-menu-meta';
-  meta.textContent = item.submenu ? '›' : item.checked ? '√' : '';
+  meta.textContent = item.submenu ? '\u203a' : item.checked ? '\u2713' : '';
 
   button.append(label, meta);
 
@@ -7425,7 +7100,7 @@ async function copyTextToClipboard(text: string, successNotice?: string): Promis
       showHeaderNotice(successNotice);
     }
   } catch {
-    showHeaderNotice('复制失败。', true);
+    showHeaderNotice('\u590d\u5236\u5931\u8d25\u3002', true);
   }
 }
 
@@ -7433,20 +7108,7 @@ async function revealPath(path: string): Promise<void> {
   try {
     await invoke('reveal_path_in_explorer', { path });
   } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '无法打开文件位置。', true);
-  }
-}
-
-async function showPathProperties(path: string): Promise<void> {
-  try {
-    const properties = await invoke<PathPropertiesPayload>('get_path_properties', { path });
-    const openDocument = documents.find((document) => document.filePath === path);
-    showPropertiesDialog(properties, {
-      isOpen: Boolean(openDocument),
-      isDirty: openDocument ? isDocumentUnsaved(openDocument) : undefined
-    });
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '无法读取属性。', true);
+    showHeaderNotice(typeof error === 'string' ? error : '\u65e0\u6cd5\u6253\u5f00\u6587\u4ef6\u4f4d\u7f6e\u3002', true);
   }
 }
 
@@ -7461,851 +7123,13 @@ function getSidebarTargetDirectoryPath(target: SidebarContextTarget): string | n
   }
 }
 
-async function promptSidebarCreateMarkdownFile(directoryPath: string): Promise<void> {
-  const fileName = await showRenameDialog({
-    title: '新建文件',
-    description: '输入要创建的 Markdown 文件名。',
-    defaultValue: 'untitled.md',
-    confirmText: '创建',
-    normalizeValue: async (value) =>
-      await invoke<string>('validate_markdown_file_name', {
-        newName: value
-      })
-  });
-
-  if (!fileName) {
-    return;
-  }
-
-  try {
-    const created = await invoke<OpenedDocument>('create_markdown_file_in_directory', {
-      directoryPath,
-      fileName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    await openDocumentFromPath(created.filePath, {
-      reloadExisting: true,
-      updateCurrentDirectory: false
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件失败。'), true);
-  }
-}
-
-async function promptSidebarCreateFolder(directoryPath: string): Promise<void> {
-  const folderName = await showRenameDialog({
-    title: '新建文件夹',
-    description: '输入要创建的文件夹名称。',
-    defaultValue: '新建文件夹',
-    confirmText: '创建',
-    normalizeValue: async (value) => value
-  });
-
-  if (!folderName) {
-    return;
-  }
-
-  try {
-    const created = await invoke<PathEntryPayload>('create_folder_in_directory', {
-      directoryPath,
-      folderName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    showHeaderNotice(`已创建文件夹：${created.name}`);
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件夹失败。'), true);
-  }
-}
-
-async function duplicateSidebarEntry(path: string): Promise<void> {
-  try {
-    const duplicated = await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    showHeaderNotice(`已创建副本：${duplicated.name}`);
-
-    if (!duplicated.isDirectory) {
-      await openDocumentFromPath(duplicated.path, {
-        reloadExisting: true,
-        updateCurrentDirectory: false
-      });
-    }
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建副本失败。'), true);
-  }
-}
-
-async function deleteSidebarEntry(path: string): Promise<void> {
-  const openDocuments = getOpenDocumentsWithinPath(path);
-
-  if (openDocuments.some((document) => isDocumentUnsaved(document))) {
-    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
-    return;
-  }
-
-  const itemName = getFileNameFromPath(path);
-  const extraNote =
-    openDocuments.length > 0 ? `\n\n相关已打开文档会先关闭：${openDocuments.length} 个。` : '';
-  const shouldDelete = await showDeleteConfirmDialog({
-    title: '确认删除',
-    description: `确定将“${itemName}”移到回收站吗？${extraNote}`,
-    confirmText: '删除'
-  });
-
-  if (!shouldDelete) {
-    return;
-  }
-
-  for (const document of openDocuments) {
-    await closeDocument(document.id);
-  }
-
-  try {
-    await invoke('move_path_to_recycle_bin', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '删除失败。'), true);
-  }
-}
-
-async function renameSidebarFileEntry(
-  target: Extract<SidebarContextTarget, { kind: 'file' }>
-): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: '重命名文件',
-    description: '修改当前文件名称。',
-    defaultValue: target.fileName,
-    confirmText: '重命名',
-    normalizeValue: async (value) =>
-      await invoke<string>('validate_markdown_file_name', {
-        newName: value
-      })
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<OpenedDocument>('rename_markdown_file', {
-      path: target.filePath,
-      newName: renameResult
-    });
-    const openDocument = documents.find((document) => document.filePath === target.filePath);
-
-    if (openDocument) {
-      applyRenamedDocumentState(openDocument, renamed);
-    }
-
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名失败。'), true);
-  }
-}
-
-async function renameSidebarFolderEntry(
-  target: Extract<SidebarContextTarget, { kind: 'folder' }>
-): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
-    description: '修改当前文件夹名称。',
-    defaultValue: target.name,
-    confirmText: '重命名',
-    normalizeValue: async (value) => value
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<RenamedDirectoryPayload>('rename_directory', {
-      path: target.path,
-      newName: renameResult
-    });
-    updateDocumentsAfterDirectoryRename(renamed.oldPath, renamed.newPath);
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名文件夹失败。'), true);
-  }
-}
-
-function buildPrimarySidebarContextMenuItems(target: SidebarContextTarget): ContextMenuItem[] {
-  const refreshItem: ContextMenuItem = {
-    kind: 'item',
-    label: '刷新',
-    enabled: Boolean(currentDirectoryPath),
-    action: async () => {
-      if (currentDirectoryPath) {
-        await refreshCurrentDirectoryFiles(currentDirectoryPath);
-      }
-    }
-  };
-
-  const directoryPath = getSidebarTargetDirectoryPath(target);
-  const filePath =
-    target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
-
-  const items: ContextMenuItem[] = [
-    {
-      kind: 'item',
-      label: '新建文件',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptSidebarCreateMarkdownFile(directoryPath);
-        }
-      }
-    },
-    {
-      kind: 'item',
-      label: '新建文件夹',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptSidebarCreateFolder(directoryPath);
-        }
-      }
-    },
-    { kind: 'separator' },
-    { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-    refreshItem
-  ];
-
-  if (target.kind !== 'blank') {
-    items.push(
-      { kind: 'separator' },
-      {
-        kind: 'item',
-        label: '重命名',
-        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
-        action: async () => {
-          if (target.kind === 'file') {
-            if (!target.filePath && target.documentId) {
-              await activateDocument(target.documentId);
-              await handleRenameRequest();
-              return;
-            }
-
-            await renameSidebarFileEntry(target);
-            return;
-          }
-
-          await renameSidebarFolderEntry(target);
-        }
-      },
-      {
-        kind: 'item',
-        label: '创建副本',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await duplicateSidebarEntry(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '删除',
-        danger: true,
-        enabled:
-          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
-          !(target.kind === 'folder' && target.isRoot),
-        action: async () => {
-          if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await closeDocument(target.documentId);
-            return;
-          }
-
-          if (filePath) {
-            await deleteSidebarEntry(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '复制文件路径',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await copyTextToClipboard(filePath, '已复制文件路径。');
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '打开文件位置',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await revealPath(filePath);
-          }
-        }
-      }
-    );
-  }
-
-  return items;
-}
-
-async function promptCreateMarkdownFile(directoryPath: string): Promise<void> {
-  const fileName = await showRenameDialog({
-    title: '新建文件',
-    description: '输入要创建的 Markdown 文件名。',
-    defaultValue: 'untitled.md',
-    confirmText: '创建'
-  });
-
-  if (!fileName) {
-    return;
-  }
-
-  try {
-    const created = await invoke<OpenedDocument>('create_markdown_file_in_directory', {
-      directoryPath,
-      fileName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    await openDocumentFromPath(created.filePath, { reloadExisting: true, updateCurrentDirectory: false });
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '创建文件失败。', true);
-  }
-}
-
-async function promptCreateFolder(directoryPath: string): Promise<void> {
-  const folderName = await showRenameDialog({
-    title: '新建文件夹',
-    description: '输入要创建的文件夹名称。',
-    defaultValue: '新建文件夹',
-    confirmText: '创建'
-  });
-
-  if (!folderName) {
-    return;
-  }
-
-  try {
-    await invoke<PathEntryPayload>('create_folder_in_directory', {
-      directoryPath,
-      folderName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '创建文件夹失败。', true);
-  }
-}
-
-async function duplicateSidebarPath(path: string): Promise<void> {
-  try {
-    await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '创建副本失败。', true);
-  }
-}
-
-async function moveSidebarPathToRecycleBin(path: string): Promise<void> {
-  const openDocuments = getOpenDocumentsWithinPath(path);
-
-  if (openDocuments.some((document) => isDocumentUnsaved(document))) {
-    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
-    return;
-  }
-
-  const shouldDelete = window.confirm('确定将所选项目移到回收站吗？');
-
-  if (!shouldDelete) {
-    return;
-  }
-
-  for (const document of openDocuments) {
-    await closeDocument(document.id);
-  }
-
-  try {
-    await invoke('move_path_to_recycle_bin', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '删除失败。', true);
-  }
-}
-
-function updateDocumentsAfterDirectoryRename(oldPath: string, newPath: string): void {
-  for (const document of documents) {
-    if (!document.filePath || !document.directoryPath) {
-      continue;
-    }
-
-    if (isPathWithinDirectory(document.filePath, oldPath)) {
-      document.filePath = replacePathPrefix(document.filePath, oldPath, newPath);
-      document.directoryPath = replacePathPrefix(document.directoryPath, oldPath, newPath);
-    }
-  }
-
-  if (currentDirectoryPath && isPathWithinDirectory(currentDirectoryPath, oldPath)) {
-    currentDirectoryPath = replacePathPrefix(currentDirectoryPath, oldPath, newPath);
-    persistCurrentDirectoryPath();
-  }
-}
-
-async function renameSidebarFile(target: Extract<SidebarContextTarget, { kind: 'file' }>): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: '重命名文件',
-    description: '修改当前文件名称。',
-    defaultValue: target.fileName,
-    confirmText: '重命名'
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<OpenedDocument>('rename_markdown_file', {
-      path: target.filePath,
-      newName: renameResult
-    });
-    const openDocument = documents.find((document) => document.filePath === target.filePath);
-
-    if (openDocument) {
-      applyRenamedDocumentState(openDocument, renamed);
-    }
-
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '重命名失败。', true);
-  }
-}
-
-async function renameSidebarFolder(target: Extract<SidebarContextTarget, { kind: 'folder' }>): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
-    description: '修改当前文件夹名称。',
-    defaultValue: target.name,
-    confirmText: '重命名'
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<RenamedDirectoryPayload>('rename_directory', {
-      path: target.path,
-      newName: renameResult
-    });
-    updateDocumentsAfterDirectoryRename(renamed.oldPath, renamed.newPath);
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(typeof error === 'string' ? error : '重命名文件夹失败。', true);
-  }
-}
-
-function getEditorSelectionText(): string {
-  return getSelectedSearchText();
-}
-
-async function performEditorCopy(): Promise<void> {
-  const text = getEditorSelectionText();
-
-  if (!text) {
-    return;
-  }
-
-  await copyTextToClipboard(text);
-}
-
-async function performEditorCut(): Promise<void> {
-  const text = getEditorSelectionText();
-
-  if (!text) {
-    return;
-  }
-
-  await copyTextToClipboard(text);
-
-  if (editorViewMode === 'source') {
-    const start = sourceTextarea.selectionStart;
-    const end = sourceTextarea.selectionEnd;
-    void applySourceDocumentChange(
-      sourceTextarea.value.slice(0, start) + sourceTextarea.value.slice(end),
-      { recordUndo: true, selectionStart: start, selectionEnd: start, scrollTop: sourceTextarea.scrollTop }
-    );
-    return;
-  }
-
-  executeEditorCommandWithActiveSession((_ctx, view) => {
-    const { selection } = view.state;
-
-    if (selection.empty) {
-      return false;
-    }
-
-    view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
-    return true;
-  });
-}
-
-async function performEditorPaste(): Promise<void> {
-  let text = '';
-
-  try {
-    text = await navigator.clipboard.readText();
-  } catch {
-    showHeaderNotice('无法读取剪贴板。', true);
-    return;
-  }
-
-  if (!text) {
-    return;
-  }
-
-  if (editorViewMode === 'source') {
-    const start = sourceTextarea.selectionStart;
-    const end = sourceTextarea.selectionEnd;
-    void applySourceDocumentChange(
-      sourceTextarea.value.slice(0, start) + text + sourceTextarea.value.slice(end),
-      {
-        recordUndo: true,
-        selectionStart: start + text.length,
-        selectionEnd: start + text.length,
-        scrollTop: sourceTextarea.scrollTop
-      }
-    );
-    return;
-  }
-
-  executeEditorCommandWithActiveSession((_ctx, view) => {
-    const { from, to } = view.state.selection;
-    view.dispatch(view.state.tr.insertText(text, from, to).scrollIntoView());
-    return true;
-  });
-}
-
-function performEditorSelectAll(): void {
-  if (editorViewMode === 'source') {
-    sourceTextarea.focus();
-    sourceTextarea.select();
-    return;
-  }
-
-  executeEditorCommandWithActiveSession((_ctx, view) => {
-    const selection = TextSelection.create(view.state.doc, 0, view.state.doc.content.size);
-    view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
-    return true;
-  });
-}
-
-function resolveSidebarContextTarget(target: EventTarget | null): SidebarContextTarget {
-  const element = getShortcutEventTargetElement(target);
-
-  if (sidebarMode === OUTLINE_MODE) {
-    return {
-      kind: 'blank',
-      directoryPath: currentDirectoryPath,
-      sidebarMode: OUTLINE_MODE
-    };
-  }
-
-  const row = element?.closest('.file-tree-row') as HTMLElement | null;
-
-  if (!row) {
-    return {
-      kind: 'blank',
-      directoryPath: currentDirectoryPath,
-      sidebarMode
-    };
-  }
-
-  const kind = row.dataset.kind as FileTreeNodeKind;
-
-  if (kind === 'file') {
-    return {
-      kind: 'file',
-      sidebarMode,
-      filePath: row.dataset.filePath || '',
-      documentId: row.dataset.documentId || null,
-      directoryPath: getParentPathFromFilePath(row.dataset.filePath || '') ?? currentDirectoryPath ?? '',
-      fileName: row.querySelector('.file-tree-label')?.textContent ?? row.dataset.filePath ?? ''
-    };
-  }
-
-  return {
-    kind: 'folder',
-    sidebarMode,
-    path: row.dataset.filePath || currentDirectoryPath || '',
-    name: row.querySelector('.file-tree-label')?.textContent ?? getDirectoryLabel(currentDirectoryPath),
-    isRoot: kind === 'root'
-  };
-}
-
-function buildSidebarViewModeItems(): ContextMenuItem[] {
-  return [];
-}
-
-function buildSidebarContextMenuItems(target: SidebarContextTarget): ContextMenuItem[] {
-  if (target.sidebarMode === OUTLINE_MODE) {
-    return [
-      { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-      ...buildSidebarViewModeItems()
-    ];
-  }
-
-  const directoryPath = getSidebarTargetDirectoryPath(target);
-  const filePath = target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
-  const items: ContextMenuItem[] = [
-    {
-      kind: 'item',
-      label: '打开',
-      enabled: Boolean(filePath),
-      action: async () => {
-        if (!filePath) {
-          return;
-        }
-
-        if (target.kind === 'file') {
-          if (target.documentId) {
-            await activateDocument(target.documentId);
-          } else {
-            await openDocumentFromPath(filePath, { updateCurrentDirectory: false });
-          }
-          return;
-        }
-
-        await setCurrentDirectoryPath(filePath);
-      }
-    },
-    {
-      kind: 'item',
-      label: '在新窗口中打开',
-      enabled: Boolean(filePath),
-      action: async () => {
-        if (!filePath) {
-          return;
-        }
-
-        await openTargetInNewWindow(
-          target.kind === 'file'
-            ? { filePath, directoryPath: target.directoryPath }
-            : { directoryPath: filePath }
-        );
-      }
-    },
-    { kind: 'separator' },
-    {
-      kind: 'item',
-      label: '新建文件',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateMarkdownFile(directoryPath);
-        }
-      }
-    },
-    {
-      kind: 'item',
-      label: '新建文件夹',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateFolder(directoryPath);
-        }
-      }
-    },
-    { kind: 'separator' },
-    {
-      kind: 'item',
-      label: '搜索',
-      action: () => openFilesSidebarSearch()
-    },
-    ...buildSidebarViewModeItems(),
-    { kind: 'separator' }
-  ];
-
-  if (target.kind !== 'blank') {
-    items.push(
-      {
-        kind: 'item',
-        label: '重命名',
-        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
-        action: async () => {
-          if (target.kind === 'file') {
-            if (!target.filePath && target.documentId) {
-              await activateDocument(target.documentId);
-              await handleRenameRequest();
-              return;
-            }
-
-            await renameSidebarFile(target);
-          } else {
-            await renameSidebarFolder(target);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '创建副本',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await duplicateSidebarPath(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '删除',
-        danger: true,
-        enabled:
-          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
-          !(target.kind === 'folder' && target.isRoot),
-        action: async () => {
-          if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await closeDocument(target.documentId);
-            return;
-          }
-
-          if (filePath) {
-            await moveSidebarPathToRecycleBin(filePath);
-          }
-        }
-      },
-      { kind: 'separator' },
-      {
-        kind: 'item',
-        label: '属性',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await showPathProperties(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '复制文件路径',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await copyTextToClipboard(filePath, '已复制文件路径。');
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '打开文件位置',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await revealPath(filePath);
-          }
-        }
-      }
-    );
-  }
-
-  return items;
-}
-
-function buildParagraphContextItems(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '正文', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.paragraph), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.paragraph) },
-    { kind: 'item', label: '一级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading1), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading1) },
-    { kind: 'item', label: '二级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading2), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading2) },
-    { kind: 'item', label: '三级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading3), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading3) },
-    { kind: 'item', label: '四级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading4), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading4) },
-    { kind: 'item', label: '五级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading5), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading5) },
-    { kind: 'item', label: '六级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading6), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading6) },
-    { kind: 'separator' },
-    { kind: 'item', label: '标题升级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingPromote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingPromote) },
-    { kind: 'item', label: '标题降级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingDemote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingDemote) },
-    { kind: 'separator' },
-    { kind: 'item', label: '引用', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.blockquote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.blockquote) },
-    { kind: 'item', label: '有序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.orderedList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.orderedList) },
-    { kind: 'item', label: '无序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.bulletList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.bulletList) },
-    { kind: 'item', label: '代码块', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.codeBlock), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.codeBlock) },
-    { kind: 'item', label: '插入表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableInsert), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableInsert) }
-  ];
-}
-
-function buildFormatContextItems(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '粗体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrong), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrong) },
-    { kind: 'item', label: '斜体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineEmphasis), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineEmphasis) },
-    { kind: 'item', label: '删除线', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrike), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrike) },
-    { kind: 'item', label: '行内代码', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineCode), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineCode) },
-    { kind: 'item', label: '高亮', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
-    { kind: 'item', label: '上标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
-    { kind: 'item', label: '下标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
-    { kind: 'item', label: '按键', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
-  ];
-}
-
-function buildTableContextItems(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '上方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowAbove), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowAbove) },
-    { kind: 'item', label: '下方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowBelow), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowBelow) },
-    { kind: 'item', label: '左侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColLeft) },
-    { kind: 'item', label: '右侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColRight) },
-    { kind: 'separator' },
-    { kind: 'item', label: '行上移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowUp), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowUp) },
-    { kind: 'item', label: '行下移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowDown), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowDown) },
-    { kind: 'item', label: '列左移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveLeft) },
-    { kind: 'item', label: '列右移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveRight) },
-    { kind: 'separator' },
-    { kind: 'item', label: '删除行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteRow), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteRow) },
-    { kind: 'item', label: '删除列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteCol), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteCol) },
-    { kind: 'item', label: '删除表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDelete), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDelete) }
-  ];
-}
-
-function buildEditorContextMenuItems(): ContextMenuItem[] {
-  const context = readCurrentEditorCommandContext();
-  const hasSelection = editorViewMode === 'source'
-    ? sourceTextarea.selectionStart !== sourceTextarea.selectionEnd
-    : context.hasSelection;
-  const items: ContextMenuItem[] = [
-    { kind: 'item', label: '撤销', enabled: context.canUndo, action: () => executeEditCommand('undo') },
-    { kind: 'item', label: '恢复', enabled: context.canRedo, action: () => executeEditCommand('redo') },
-    { kind: 'separator' },
-    { kind: 'item', label: '剪切', enabled: hasSelection, action: async () => performEditorCut() },
-    { kind: 'item', label: '复制', enabled: hasSelection, action: async () => performEditorCopy() },
-    { kind: 'item', label: '粘贴', action: async () => performEditorPaste() },
-    { kind: 'item', label: '全选', action: () => performEditorSelectAll() },
-    { kind: 'separator' },
-    { kind: 'item', label: '查找', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('find') },
-    { kind: 'item', label: '替换', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('replace') }
-  ];
-
-  if (editorViewMode === 'rendered') {
-    items.push(
-      { kind: 'separator' },
-      { kind: 'item', label: '段落', submenu: buildParagraphContextItems() },
-      { kind: 'item', label: '格式', submenu: buildFormatContextItems() }
-    );
-
-    if (context.isInTable) {
-      items.push({ kind: 'item', label: '表格', submenu: buildTableContextItems() });
-    }
-  }
-
-  return items;
-}
-
 async function performActiveEditorPaste(): Promise<void> {
   let text = '';
 
   try {
     text = await navigator.clipboard.readText();
   } catch {
-    showHeaderNotice('无法读取剪贴板。', true);
+    showHeaderNotice('\u65e0\u6cd5\u8bfb\u53d6\u526a\u8d34\u677f\u3002', true);
     return;
   }
 
@@ -8337,53 +7161,53 @@ async function performActiveEditorPaste(): Promise<void> {
 
 function buildActiveParagraphContextItems(): ContextMenuItem[] {
   return [
-    { kind: 'item', label: '正文', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.paragraph), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.paragraph) },
-    { kind: 'item', label: '一级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading1), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading1) },
-    { kind: 'item', label: '二级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading2), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading2) },
-    { kind: 'item', label: '三级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading3), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading3) },
-    { kind: 'item', label: '四级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading4), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading4) },
-    { kind: 'item', label: '五级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading5), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading5) },
-    { kind: 'item', label: '六级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading6), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading6) },
+    { kind: 'item', label: '\u6b63\u6587', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.paragraph), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.paragraph) },
+    { kind: 'item', label: '\u4e00\u7ea7\u6807\u9898', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading1), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading1) },
+    { kind: 'item', label: '\u4e8c\u7ea7\u6807\u9898', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading2), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading2) },
+    { kind: 'item', label: '\u4e09\u7ea7\u6807\u9898', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading3), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading3) },
+    { kind: 'item', label: '\u56db\u7ea7\u6807\u9898', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading4), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading4) },
+    { kind: 'item', label: '\u4e94\u7ea7\u6807\u9898', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading5), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading5) },
+    { kind: 'item', label: '\u516d\u7ea7\u6807\u9898', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading6), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading6) },
     { kind: 'separator' },
-    { kind: 'item', label: '标题升级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingPromote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingPromote) },
-    { kind: 'item', label: '标题降级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingDemote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingDemote) },
+    { kind: 'item', label: '\u6807\u9898\u5347\u7ea7', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingPromote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingPromote) },
+    { kind: 'item', label: '\u6807\u9898\u964d\u7ea7', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingDemote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingDemote) },
     { kind: 'separator' },
-    { kind: 'item', label: '引用', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.blockquote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.blockquote) },
-    { kind: 'item', label: '有序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.orderedList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.orderedList) },
-    { kind: 'item', label: '无序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.bulletList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.bulletList) },
-    { kind: 'item', label: '代码块', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.codeBlock), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.codeBlock) },
-    { kind: 'item', label: '插入表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableInsert), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableInsert) }
+    { kind: 'item', label: '\u5f15\u7528', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.blockquote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.blockquote) },
+    { kind: 'item', label: '\u6709\u5e8f\u5217\u8868', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.orderedList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.orderedList) },
+    { kind: 'item', label: '\u65e0\u5e8f\u5217\u8868', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.bulletList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.bulletList) },
+    { kind: 'item', label: '\u4ee3\u7801\u5757', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.codeBlock), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.codeBlock) },
+    { kind: 'item', label: '\u63d2\u5165\u8868\u683c', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableInsert), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableInsert) }
   ];
 }
 
 function buildActiveFormatContextItems(): ContextMenuItem[] {
   return [
-    { kind: 'item', label: '粗体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrong), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrong) },
-    { kind: 'item', label: '斜体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineEmphasis), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineEmphasis) },
-    { kind: 'item', label: '删除线', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrike), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrike) },
-    { kind: 'item', label: '行内代码', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineCode), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineCode) },
-    { kind: 'item', label: '高亮', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
-    { kind: 'item', label: '上标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
-    { kind: 'item', label: '下标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
-    { kind: 'item', label: '按键', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
+    { kind: 'item', label: '\u7c97\u4f53', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrong), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrong) },
+    { kind: 'item', label: '\u659c\u4f53', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineEmphasis), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineEmphasis) },
+    { kind: 'item', label: '\u5220\u9664\u7ebf', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrike), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrike) },
+    { kind: 'item', label: '\u884c\u5185\u4ee3\u7801', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineCode), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineCode) },
+    { kind: 'item', label: '\u9ad8\u4eae', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
+    { kind: 'item', label: '\u4e0a\u6807', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
+    { kind: 'item', label: '\u4e0b\u6807', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
+    { kind: 'item', label: '\u6309\u952e', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
   ];
 }
 
 function buildActiveTableContextItems(): ContextMenuItem[] {
   return [
-    { kind: 'item', label: '上方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowAbove), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowAbove) },
-    { kind: 'item', label: '下方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowBelow), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowBelow) },
-    { kind: 'item', label: '左侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColLeft) },
-    { kind: 'item', label: '右侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColRight) },
+    { kind: 'item', label: '\u4e0a\u65b9\u63d2\u5165\u884c', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowAbove), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowAbove) },
+    { kind: 'item', label: '\u4e0b\u65b9\u63d2\u5165\u884c', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowBelow), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowBelow) },
+    { kind: 'item', label: '\u5de6\u4fa7\u63d2\u5165\u5217', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColLeft) },
+    { kind: 'item', label: '\u53f3\u4fa7\u63d2\u5165\u5217', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColRight) },
     { kind: 'separator' },
-    { kind: 'item', label: '行上移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowUp), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowUp) },
-    { kind: 'item', label: '行下移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowDown), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowDown) },
-    { kind: 'item', label: '列左移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveLeft) },
-    { kind: 'item', label: '列右移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveRight) },
+    { kind: 'item', label: '\u884c\u4e0a\u79fb', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowUp), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowUp) },
+    { kind: 'item', label: '\u884c\u4e0b\u79fb', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowDown), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowDown) },
+    { kind: 'item', label: '\u5217\u5de6\u79fb', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveLeft) },
+    { kind: 'item', label: '\u5217\u53f3\u79fb', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveRight) },
     { kind: 'separator' },
-    { kind: 'item', label: '删除行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteRow), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteRow) },
-    { kind: 'item', label: '删除列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteCol), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteCol) },
-    { kind: 'item', label: '删除表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDelete), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDelete) }
+    { kind: 'item', label: '\u5220\u9664\u884c', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteRow), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteRow) },
+    { kind: 'item', label: '\u5220\u9664\u5217', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteCol), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteCol) },
+    { kind: 'item', label: '\u5220\u9664\u8868\u683c', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDelete), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDelete) }
   ];
 }
 
@@ -8394,27 +7218,27 @@ function buildActiveEditorContextMenuItems(): ContextMenuItem[] {
       ? sourceTextarea.selectionStart !== sourceTextarea.selectionEnd
       : context.hasSelection;
   const items: ContextMenuItem[] = [
-    { kind: 'item', label: '撤销', enabled: context.canUndo, action: () => executeEditCommand('undo') },
-    { kind: 'item', label: '恢复', enabled: context.canRedo, action: () => executeEditCommand('redo') },
+    { kind: 'item', label: '\u64a4\u9500', enabled: context.canUndo, action: () => executeEditCommand('undo') },
+    { kind: 'item', label: '\u6062\u590d', enabled: context.canRedo, action: () => executeEditCommand('redo') },
     { kind: 'separator' },
-    { kind: 'item', label: '剪切', enabled: hasSelection, action: async () => performEditorCut() },
-    { kind: 'item', label: '复制', enabled: hasSelection, action: async () => performEditorCopy() },
-    { kind: 'item', label: '粘贴', action: async () => performActiveEditorPaste() },
-    { kind: 'item', label: '全选', action: () => performEditorSelectAll() },
+    { kind: 'item', label: '\u526a\u5207', enabled: hasSelection, action: async () => performEditorCut() },
+    { kind: 'item', label: '\u590d\u5236', enabled: hasSelection, action: async () => performEditorCopy() },
+    { kind: 'item', label: '\u7c98\u8d34', action: async () => performActiveEditorPaste() },
+    { kind: 'item', label: '\u5168\u9009', action: () => performEditorSelectAll() },
     { kind: 'separator' },
-    { kind: 'item', label: '查找', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('find') },
-    { kind: 'item', label: '替换', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('replace') }
+    { kind: 'item', label: '\u67e5\u627e', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('find') },
+    { kind: 'item', label: '\u66ff\u6362', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('replace') }
   ];
 
   if (editorViewMode === 'rendered') {
     items.push(
       { kind: 'separator' },
-      { kind: 'item', label: '段落', submenu: buildActiveParagraphContextItems() },
-      { kind: 'item', label: '格式', submenu: buildActiveFormatContextItems() }
+      { kind: 'item', label: '\u6bb5\u843d', submenu: buildActiveParagraphContextItems() },
+      { kind: 'item', label: '\u683c\u5f0f', submenu: buildActiveFormatContextItems() }
     );
 
     if (context.isInTable) {
-      items.push({ kind: 'item', label: '表格', submenu: buildActiveTableContextItems() });
+      items.push({ kind: 'item', label: '\u8868\u683c', submenu: buildActiveTableContextItems() });
     }
   }
 
@@ -8423,10 +7247,10 @@ function buildActiveEditorContextMenuItems(): ContextMenuItem[] {
 
 async function promptCreateMarkdownFileActive(directoryPath: string): Promise<void> {
   const fileName = await showRenameDialog({
-    title: '新建文件',
-    description: '输入要创建的 Markdown 文件名。',
+    title: '\u65b0\u5efa\u6587\u4ef6',
+    description: '\u8f93\u5165\u8981\u521b\u5efa\u7684 Markdown \u6587\u4ef6\u540d\u3002',
     defaultValue: 'untitled.md',
-    confirmText: '创建',
+    confirmText: '\u521b\u5efa',
     normalizeValue: async (value) =>
       await invoke<string>('validate_markdown_file_name', {
         newName: value
@@ -8448,17 +7272,17 @@ async function promptCreateMarkdownFileActive(directoryPath: string): Promise<vo
       updateCurrentDirectory: false
     });
   } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件失败。'), true);
+    showHeaderNotice(getErrorMessage(error, '\u521b\u5efa\u6587\u4ef6\u5931\u8d25\u3002'), true);
   }
 }
 
 async function promptCreateFolderActive(directoryPath: string): Promise<void> {
   const folderName = await showRenameDialog({
-    title: '新建文件夹',
-    description: '输入要创建的文件夹名称。',
-    defaultValue: '新建文件夹',
-    confirmText: '创建',
-    normalizeValue: async (value) => value
+    title: '\u65b0\u5efa\u6587\u4ef6\u5939',
+    description: '\u8f93\u5165\u8981\u521b\u5efa\u7684\u6587\u4ef6\u5939\u540d\u79f0\u3002',
+    defaultValue: '\u65b0\u5efa\u6587\u4ef6\u5939',
+    confirmText: '\u521b\u5efa',
+    normalizeValue: validateFolderName
   });
 
   if (!folderName) {
@@ -8471,9 +7295,9 @@ async function promptCreateFolderActive(directoryPath: string): Promise<void> {
       folderName
     });
     await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    showHeaderNotice(`已创建文件夹：${created.name}`);
+    showHeaderNotice(`\u5df2\u521b\u5efa\u6587\u4ef6\u5939\uff1a${created.name}`);
   } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件夹失败。'), true);
+    showHeaderNotice(getErrorMessage(error, '\u521b\u5efa\u6587\u4ef6\u5939\u5931\u8d25\u3002'), true);
   }
 }
 
@@ -8481,7 +7305,7 @@ async function duplicateSidebarEntryActive(path: string): Promise<void> {
   try {
     const duplicated = await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
     await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    showHeaderNotice(`已创建副本：${duplicated.name}`);
+    showHeaderNotice(`\u5df2\u521b\u5efa\u526f\u672c\uff1a${duplicated.name}`);
 
     if (!duplicated.isDirectory) {
       await openDocumentFromPath(duplicated.path, {
@@ -8490,7 +7314,7 @@ async function duplicateSidebarEntryActive(path: string): Promise<void> {
       });
     }
   } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建副本失败。'), true);
+    showHeaderNotice(getErrorMessage(error, '\u521b\u5efa\u526f\u672c\u5931\u8d25\u3002'), true);
   }
 }
 
@@ -8498,17 +7322,17 @@ async function deleteSidebarEntryActive(path: string): Promise<void> {
   const openDocuments = getOpenDocumentsWithinPath(path);
 
   if (openDocuments.some((document) => isDocumentUnsaved(document))) {
-    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
+    showHeaderNotice('\u8bf7\u5148\u4fdd\u5b58\u6216\u5173\u95ed\u76f8\u5173\u6587\u6863\uff0c\u518d\u5220\u9664\u3002', true);
     return;
   }
 
   const itemName = getFileNameFromPath(path);
   const extraNote =
-    openDocuments.length > 0 ? `\n\n相关已打开文档会先关闭，共 ${openDocuments.length} 个。` : '';
+    openDocuments.length > 0 ? `\n\n\u76f8\u5173\u5df2\u6253\u5f00\u6587\u6863\u4f1a\u5148\u5173\u95ed\uff1a${openDocuments.length} \u4e2a\u3002` : '';
   const shouldDelete = await showDeleteConfirmDialog({
-    title: '确认删除',
-    description: `确定将“${itemName}”移到回收站吗？${extraNote}`,
-    confirmText: '删除'
+    title: '\u786e\u8ba4\u5220\u9664',
+    description: `\u786e\u5b9a\u5c06\u201c${itemName}\u201d\u79fb\u5230\u56de\u6536\u7ad9\u5417\uff1f${extraNote}`,
+    confirmText: '\u5220\u9664'
   });
 
   if (!shouldDelete) {
@@ -8523,7 +7347,7 @@ async function deleteSidebarEntryActive(path: string): Promise<void> {
     await invoke('move_path_to_recycle_bin', { path });
     await refreshCurrentDirectoryFiles(currentDirectoryPath);
   } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '删除失败。'), true);
+    showHeaderNotice(getErrorMessage(error, '\u5220\u9664\u5931\u8d25\u3002'), true);
   }
 }
 
@@ -8531,10 +7355,10 @@ async function renameSidebarFileEntryActive(
   target: Extract<SidebarContextTarget, { kind: 'file' }>
 ): Promise<void> {
   const renameResult = await showRenameDialog({
-    title: '重命名文件',
-    description: '修改当前文件名称。',
+    title: '\u91cd\u547d\u540d\u6587\u4ef6',
+    description: '\u4fee\u6539\u5f53\u524d\u6587\u4ef6\u540d\u79f0\u3002',
     defaultValue: target.fileName,
-    confirmText: '重命名',
+    confirmText: '\u91cd\u547d\u540d',
     normalizeValue: async (value) =>
       await invoke<string>('validate_markdown_file_name', {
         newName: value
@@ -8560,7 +7384,7 @@ async function renameSidebarFileEntryActive(
     renderDocumentHeader();
     requestSidebarRefreshForCurrentMode();
   } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名失败。'), true);
+    showHeaderNotice(getErrorMessage(error, '\u91cd\u547d\u540d\u5931\u8d25\u3002'), true);
   }
 }
 
@@ -8568,11 +7392,11 @@ async function renameSidebarFolderEntryActive(
   target: Extract<SidebarContextTarget, { kind: 'folder' }>
 ): Promise<void> {
   const renameResult = await showRenameDialog({
-    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
-    description: '修改当前文件夹名称。',
+    title: target.isRoot ? '\u91cd\u547d\u540d\u6839\u76ee\u5f55' : '\u91cd\u547d\u540d\u6587\u4ef6\u5939',
+    description: '\u4fee\u6539\u5f53\u524d\u6587\u4ef6\u5939\u540d\u79f0\u3002',
     defaultValue: target.name,
-    confirmText: '重命名',
-    normalizeValue: async (value) => value
+    confirmText: '\u91cd\u547d\u540d',
+    normalizeValue: validateFolderName
   });
 
   if (!renameResult) {
@@ -8589,14 +7413,14 @@ async function renameSidebarFolderEntryActive(
     renderDocumentHeader();
     requestSidebarRefreshForCurrentMode();
   } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名文件夹失败。'), true);
+    showHeaderNotice(getErrorMessage(error, '\u91cd\u547d\u540d\u6587\u4ef6\u5939\u5931\u8d25\u3002'), true);
   }
 }
 
 function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): ContextMenuItem[] {
   const refreshItem: ContextMenuItem = {
     kind: 'item',
-    label: '刷新',
+    label: '\u5237\u65b0',
     enabled: Boolean(currentDirectoryPath),
     action: async () => {
       if (currentDirectoryPath) {
@@ -8606,10 +7430,7 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
   };
 
   if (target.sidebarMode === OUTLINE_MODE) {
-    return [
-      { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-      refreshItem
-    ];
+    return [];
   }
 
   const directoryPath = getSidebarTargetDirectoryPath(target);
@@ -8618,7 +7439,7 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
   const items: ContextMenuItem[] = [
     {
       kind: 'item',
-      label: '新建文件',
+      label: '\u65b0\u5efa\u6587\u4ef6',
       enabled: Boolean(directoryPath),
       action: async () => {
         if (directoryPath) {
@@ -8628,7 +7449,7 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
     },
     {
       kind: 'item',
-      label: '新建文件夹',
+      label: '\u65b0\u5efa\u6587\u4ef6\u5939',
       enabled: Boolean(directoryPath),
       action: async () => {
         if (directoryPath) {
@@ -8637,7 +7458,7 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
       }
     },
     { kind: 'separator' },
-    { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
+    { kind: 'item', label: '\u641c\u7d22', action: () => openFilesSidebarSearch() },
     refreshItem
   ];
 
@@ -8646,7 +7467,7 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
       { kind: 'separator' },
       {
         kind: 'item',
-        label: '重命名',
+        label: '\u91cd\u547d\u540d',
         enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
         action: async () => {
           if (target.kind === 'file') {
@@ -8665,7 +7486,7 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
       },
       {
         kind: 'item',
-        label: '创建副本',
+        label: '\u521b\u5efa\u526f\u672c',
         enabled: Boolean(filePath),
         action: async () => {
           if (filePath) {
@@ -8675,14 +7496,14 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
       },
       {
         kind: 'item',
-        label: '删除',
+        label: '\u5220\u9664',
         danger: true,
         enabled:
           (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
           !(target.kind === 'folder' && target.isRoot),
         action: async () => {
           if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await closeDocument(target.documentId);
+            await confirmDiscardUntitledSidebarDocument(target.documentId);
             return;
           }
 
@@ -8693,17 +7514,17 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
       },
       {
         kind: 'item',
-        label: '复制文件路径',
+        label: '\u590d\u5236\u6587\u4ef6\u8def\u5f84',
         enabled: Boolean(filePath),
         action: async () => {
           if (filePath) {
-            await copyTextToClipboard(filePath, '已复制文件路径。');
+            await copyTextToClipboard(filePath, '\u5df2\u590d\u5236\u6587\u4ef6\u8def\u5f84\u3002');
           }
         }
       },
       {
         kind: 'item',
-        label: '打开文件位置',
+        label: '\u6253\u5f00\u6587\u4ef6\u4f4d\u7f6e',
         enabled: Boolean(filePath),
         action: async () => {
           if (filePath) {
@@ -8742,1468 +7563,78 @@ function handleEditorContextMenu(event: MouseEvent): void {
   openContextMenu(buildActiveEditorContextMenuItems(), event.clientX, event.clientY);
 }
 
-function buildSidebarContextMenuItemsCurrent(target: SidebarContextTarget): ContextMenuItem[] {
-  const refreshItem: ContextMenuItem = {
-    kind: 'item',
-    label: '刷新',
-    enabled: Boolean(currentDirectoryPath),
-    action: async () => {
-      if (currentDirectoryPath) {
-        await refreshCurrentDirectoryFiles(currentDirectoryPath);
-      }
-    }
-  };
 
-  if (target.sidebarMode === OUTLINE_MODE) {
-    return [
-      { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-      refreshItem
-    ];
+const WINDOWS_INVALID_FILE_NAME_CHARS = /[<>:\"/\|?*]/;
+const WINDOWS_RESERVED_FILE_NAMES = new Set([
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  'COM1',
+  'COM2',
+  'COM3',
+  'COM4',
+  'COM5',
+  'COM6',
+  'COM7',
+  'COM8',
+  'COM9',
+  'LPT1',
+  'LPT2',
+  'LPT3',
+  'LPT4',
+  'LPT5',
+  'LPT6',
+  'LPT7',
+  'LPT8',
+  'LPT9'
+]);
+
+async function validateFolderName(value: string): Promise<string> {
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    throw new Error('\u6587\u4ef6\u5939\u540d\u79f0\u4e0d\u80fd\u4e3a\u7a7a\u3002');
   }
 
-  const directoryPath = getSidebarTargetDirectoryPath(target);
-  const filePath =
-    target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
-  const items: ContextMenuItem[] = [
-    {
-      kind: 'item',
-      label: '新建文件',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateMarkdownFileFinal(directoryPath);
-        }
-      }
-    },
-    {
-      kind: 'item',
-      label: '新建文件夹',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateFolderFinal(directoryPath);
-        }
-      }
-    },
-    { kind: 'separator' },
-    { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-    refreshItem
-  ];
-
-  if (target.kind !== 'blank') {
-    items.push(
-      { kind: 'separator' },
-      {
-        kind: 'item',
-        label: '重命名',
-        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
-        action: async () => {
-          if (target.kind === 'file') {
-            if (!target.filePath && target.documentId) {
-              await activateDocument(target.documentId);
-              await handleRenameRequest();
-              return;
-            }
-
-            await renameSidebarFileFinal(target);
-            return;
-          }
-
-          await renameSidebarFolderFinal(target);
-        }
-      },
-      {
-        kind: 'item',
-        label: '创建副本',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await duplicateSidebarPathFinal(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '删除',
-        danger: true,
-        enabled:
-          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
-          !(target.kind === 'folder' && target.isRoot),
-        action: async () => {
-          if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await closeDocument(target.documentId);
-            return;
-          }
-
-          if (filePath) {
-            await moveSidebarPathToRecycleBinFinal(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '复制文件路径',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await copyTextToClipboard(filePath, '已复制文件路径。');
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '打开文件位置',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await revealPath(filePath);
-          }
-        }
-      }
-    );
+  if (trimmed.endsWith('.') || trimmed.endsWith(' ')) {
+    throw new Error('\u6587\u4ef6\u5939\u540d\u79f0\u4e0d\u80fd\u4ee5\u7a7a\u683c\u6216\u70b9\u7ed3\u5c3e\u3002');
   }
 
-  return items;
-}
-
-async function openTargetInNewWindow(options: {
-  filePath?: string | null;
-  directoryPath?: string | null;
-}): Promise<void> {
-  void options;
-  showHeaderNotice('“在新窗口打开”已移除。', true);
-}
-
-async function openTargetInNewWindowFinal(options: {
-  filePath?: string | null;
-  directoryPath?: string | null;
-}): Promise<void> {
-  void options;
-  showHeaderNotice('“在新窗口打开”已移除。', true);
-  return;
-  try {
-    await invoke('open_in_new_window', {
-      payload: {
-        filePath: options.filePath ?? null,
-        directoryPath: options.directoryPath ?? null
-      }
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '无法在新窗口中打开。'), true);
+  if (trimmed.includes('\\') || trimmed.includes('/')) {
+    throw new Error('\u6587\u4ef6\u5939\u540d\u79f0\u4e0d\u80fd\u5305\u542b\u8def\u5f84\u5206\u9694\u7b26\u3002');
   }
+
+  if (WINDOWS_INVALID_FILE_NAME_CHARS.test(trimmed)) {
+    throw new Error('\u6587\u4ef6\u5939\u540d\u79f0\u5305\u542b Windows \u4e0d\u5141\u8bb8\u7684\u5b57\u7b26\u3002');
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (WINDOWS_RESERVED_FILE_NAMES.has(upper)) {
+    throw new Error('\u8be5\u540d\u79f0\u88ab Windows \u4fdd\u7559\uff0c\u4e0d\u80fd\u7528\u4f5c\u6587\u4ef6\u5939\u540d\u79f0\u3002');
+  }
+
+  return trimmed;
 }
 
-async function promptCreateMarkdownFileFinal(directoryPath: string): Promise<void> {
-  const fileName = await showRenameDialog({
-    title: '新建文件',
-    description: '输入要创建的 Markdown 文件名。',
-    defaultValue: 'untitled.md',
-    confirmText: '创建',
-    normalizeValue: async (value) =>
-      await invoke<string>('validate_markdown_file_name', {
-        newName: value
-      })
+async function confirmDiscardUntitledSidebarDocument(documentId: string): Promise<void> {
+  const document = documents.find((entry) => entry.id === documentId);
+
+  if (!document) {
+    return;
+  }
+
+  const shouldDiscard = await showDeleteConfirmDialog({
+    title: '\u5173\u95ed\u672a\u4fdd\u5b58\u6587\u6863',
+    description: `\u786e\u5b9a\u5173\u95ed\u201c${document.fileName}\u201d\u5e76\u4e22\u5f03\u672a\u4fdd\u5b58\u7684\u5185\u5bb9\u5417\uff1f`,
+    confirmText: '\u5173\u95ed'
   });
 
-  if (!fileName) {
+  if (!shouldDiscard) {
     return;
   }
 
-  try {
-    const created = await invoke<OpenedDocument>('create_markdown_file_in_directory', {
-      directoryPath,
-      fileName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    await openDocumentFromPath(created.filePath, {
-      reloadExisting: true,
-      updateCurrentDirectory: false
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件失败。'), true);
-  }
-}
-
-async function promptCreateFolderFinal(directoryPath: string): Promise<void> {
-  const folderName = await showRenameDialog({
-    title: '新建文件夹',
-    description: '输入要创建的文件夹名称。',
-    defaultValue: '新建文件夹',
-    confirmText: '创建',
-    normalizeValue: async (value) => value
-  });
-
-  if (!folderName) {
-    return;
-  }
-
-  try {
-    const created = await invoke<PathEntryPayload>('create_folder_in_directory', {
-      directoryPath,
-      folderName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    showHeaderNotice(`已创建文件夹：${created.name}`);
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件夹失败。'), true);
-  }
-}
-
-async function duplicateSidebarPathFinal(path: string): Promise<void> {
-  try {
-    const duplicated = await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-
-    if (duplicated.isDirectory) {
-      showHeaderNotice(`已创建副本：${duplicated.name}`);
-      return;
-    }
-
-    showHeaderNotice(`已创建副本：${duplicated.name}`);
-    await openDocumentFromPath(duplicated.path, {
-      reloadExisting: true,
-      updateCurrentDirectory: false
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建副本失败。'), true);
-  }
-}
-
-async function moveSidebarPathToRecycleBinFinal(path: string): Promise<void> {
-  const openDocuments = getOpenDocumentsWithinPath(path);
-
-  if (openDocuments.some((document) => isDocumentUnsaved(document))) {
-    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
-    return;
-  }
-
-  const itemName = getFileNameFromPath(path);
-  const extraNote =
-    openDocuments.length > 0 ? `\n\n相关已打开文档会先关闭：${openDocuments.length} 个。` : '';
-  const shouldDelete = await showDeleteConfirmDialog({
-    title: '确认删除',
-    description: `确定将“${itemName}”移到回收站吗？${extraNote}`,
-    confirmText: '删除'
-  });
-
-  if (!shouldDelete) {
-    return;
-  }
-
-  for (const document of openDocuments) {
-    await closeDocument(document.id);
-  }
-
-  try {
-    await invoke('move_path_to_recycle_bin', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '删除失败。'), true);
-  }
-}
-
-async function renameSidebarFileFinal(
-  target: Extract<SidebarContextTarget, { kind: 'file' }>
-): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: '重命名文件',
-    description: '修改当前文件名称。',
-    defaultValue: target.fileName,
-    confirmText: '重命名',
-    normalizeValue: async (value) =>
-      await invoke<string>('validate_markdown_file_name', {
-        newName: value
-      })
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<OpenedDocument>('rename_markdown_file', {
-      path: target.filePath,
-      newName: renameResult
-    });
-    const openDocument = documents.find((document) => document.filePath === target.filePath);
-
-    if (openDocument) {
-      applyRenamedDocumentState(openDocument, renamed);
-    }
-
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名失败。'), true);
-  }
-}
-
-async function renameSidebarFolderFinal(
-  target: Extract<SidebarContextTarget, { kind: 'folder' }>
-): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
-    description: '修改当前文件夹名称。',
-    defaultValue: target.name,
-    confirmText: '重命名',
-    normalizeValue: async (value) => value
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<RenamedDirectoryPayload>('rename_directory', {
-      path: target.path,
-      newName: renameResult
-    });
-    updateDocumentsAfterDirectoryRename(renamed.oldPath, renamed.newPath);
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名文件夹失败。'), true);
-  }
-}
-
-function buildSidebarContextMenuItemsFinal(target: SidebarContextTarget): ContextMenuItem[] {
-  const refreshItem: ContextMenuItem = {
-    kind: 'item',
-    label: '刷新',
-    enabled: Boolean(currentDirectoryPath),
-    action: async () => {
-      if (currentDirectoryPath) {
-        await refreshCurrentDirectoryFiles(currentDirectoryPath);
-      }
-    }
-  };
-
-  if (target.sidebarMode === OUTLINE_MODE) {
-    return [
-      { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-      refreshItem
-    ];
-  }
-
-  const directoryPath = getSidebarTargetDirectoryPath(target);
-  const filePath =
-    target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
-  const items: ContextMenuItem[] = [
-    {
-      kind: 'item',
-      label: '在新窗口中打开',
-      enabled: Boolean(filePath),
-      action: async () => {
-        if (filePath) {
-          await openTargetInNewWindowFinal(
-            target.kind === 'file'
-              ? { filePath, directoryPath: target.directoryPath }
-              : { directoryPath: filePath }
-          );
-        }
-      }
-    },
-    { kind: 'separator' },
-    {
-      kind: 'item',
-      label: '新建文件',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateMarkdownFileFinal(directoryPath);
-        }
-      }
-    },
-    {
-      kind: 'item',
-      label: '新建文件夹',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateFolderFinal(directoryPath);
-        }
-      }
-    },
-    { kind: 'separator' },
-    { kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() },
-    refreshItem
-  ];
-
-  if (target.kind !== 'blank') {
-    items.push(
-      { kind: 'separator' },
-      {
-        kind: 'item',
-        label: '重命名',
-        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
-        action: async () => {
-          if (target.kind === 'file') {
-            if (!target.filePath && target.documentId) {
-              await activateDocument(target.documentId);
-              await handleRenameRequest();
-              return;
-            }
-
-            await renameSidebarFileFinal(target);
-            return;
-          }
-
-          await renameSidebarFolderFinal(target);
-        }
-      },
-      {
-        kind: 'item',
-        label: '创建副本',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await duplicateSidebarPathFinal(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '删除',
-        danger: true,
-        enabled:
-          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
-          !(target.kind === 'folder' && target.isRoot),
-        action: async () => {
-          if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await closeDocument(target.documentId);
-            return;
-          }
-
-          if (filePath) {
-            await moveSidebarPathToRecycleBinFinal(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '复制文件路径',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await copyTextToClipboard(filePath, '已复制文件路径。');
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '打开文件位置',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await revealPath(filePath);
-          }
-        }
-      }
-    );
-  }
-
-  return items;
-}
-
-function buildParagraphContextItemsFinal(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '正文', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.paragraph), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.paragraph) },
-    { kind: 'item', label: '一级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading1), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading1) },
-    { kind: 'item', label: '二级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading2), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading2) },
-    { kind: 'item', label: '三级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading3), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading3) },
-    { kind: 'item', label: '四级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading4), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading4) },
-    { kind: 'item', label: '五级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading5), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading5) },
-    { kind: 'item', label: '六级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading6), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading6) },
-    { kind: 'separator' },
-    { kind: 'item', label: '标题升级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingPromote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingPromote) },
-    { kind: 'item', label: '标题降级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingDemote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingDemote) },
-    { kind: 'separator' },
-    { kind: 'item', label: '引用', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.blockquote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.blockquote) },
-    { kind: 'item', label: '有序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.orderedList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.orderedList) },
-    { kind: 'item', label: '无序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.bulletList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.bulletList) },
-    { kind: 'item', label: '代码块', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.codeBlock), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.codeBlock) },
-    { kind: 'item', label: '插入表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableInsert), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableInsert) }
-  ];
-}
-
-function buildFormatContextItemsFinal(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '粗体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrong), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrong) },
-    { kind: 'item', label: '斜体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineEmphasis), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineEmphasis) },
-    { kind: 'item', label: '删除线', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrike), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrike) },
-    { kind: 'item', label: '行内代码', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineCode), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineCode) },
-    { kind: 'item', label: '高亮', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
-    { kind: 'item', label: '上标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
-    { kind: 'item', label: '下标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
-    { kind: 'item', label: '按键', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
-  ];
-}
-
-function buildTableContextItemsFinal(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '上方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowAbove), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowAbove) },
-    { kind: 'item', label: '下方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowBelow), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowBelow) },
-    { kind: 'item', label: '左侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColLeft) },
-    { kind: 'item', label: '右侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColRight) },
-    { kind: 'separator' },
-    { kind: 'item', label: '行上移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowUp), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowUp) },
-    { kind: 'item', label: '行下移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowDown), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowDown) },
-    { kind: 'item', label: '列左移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveLeft) },
-    { kind: 'item', label: '列右移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveRight) },
-    { kind: 'separator' },
-    { kind: 'item', label: '删除行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteRow), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteRow) },
-    { kind: 'item', label: '删除列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteCol), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteCol) },
-    { kind: 'item', label: '删除表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDelete), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDelete) }
-  ];
-}
-
-function buildEditorContextMenuItemsFinal(): ContextMenuItem[] {
-  const context = readCurrentEditorCommandContext();
-  const hasSelection =
-    editorViewMode === 'source'
-      ? sourceTextarea.selectionStart !== sourceTextarea.selectionEnd
-      : context.hasSelection;
-  const items: ContextMenuItem[] = [
-    { kind: 'item', label: '撤销', enabled: context.canUndo, action: () => executeEditCommand('undo') },
-    { kind: 'item', label: '恢复', enabled: context.canRedo, action: () => executeEditCommand('redo') },
-    { kind: 'separator' },
-    { kind: 'item', label: '剪切', enabled: hasSelection, action: async () => performEditorCut() },
-    { kind: 'item', label: '复制', enabled: hasSelection, action: async () => performEditorCopy() },
-    { kind: 'item', label: '粘贴', action: async () => performEditorPaste() },
-    { kind: 'item', label: '全选', action: () => performEditorSelectAll() },
-    { kind: 'separator' },
-    { kind: 'item', label: '查找', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('find') },
-    { kind: 'item', label: '替换', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('replace') }
-  ];
-
-  if (editorViewMode === 'rendered') {
-    items.push(
-      { kind: 'separator' },
-      { kind: 'item', label: '段落', submenu: buildParagraphContextItemsFinal() },
-      { kind: 'item', label: '格式', submenu: buildFormatContextItemsFinal() }
-    );
-
-    if (context.isInTable) {
-      items.push({ kind: 'item', label: '表格', submenu: buildTableContextItemsFinal() });
-    }
-  }
-
-  return items;
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return typeof error === 'string' && error.length > 0 ? error : fallback;
-}
-
-async function openTargetInNewWindowClean(options: {
-  filePath?: string | null;
-  directoryPath?: string | null;
-}): Promise<void> {
-  void options;
-  showHeaderNotice('“在新窗口打开”已移除。', true);
-  return;
-  try {
-    await invoke('open_in_new_window', {
-      payload: {
-        filePath: options.filePath ?? null,
-        directoryPath: options.directoryPath ?? null
-      }
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '无法在新窗口中打开。'), true);
-  }
-}
-
-async function promptCreateMarkdownFileClean(directoryPath: string): Promise<void> {
-  const fileName = await showRenameDialog({
-    title: '新建文件',
-    description: '输入要创建的 Markdown 文件名。',
-    defaultValue: 'untitled.md',
-    confirmText: '创建',
-    normalizeValue: async (value) =>
-      await invoke<string>('validate_markdown_file_name', {
-        newName: value
-      })
-  });
-
-  if (!fileName) {
-    return;
-  }
-
-  try {
-    const created = await invoke<OpenedDocument>('create_markdown_file_in_directory', {
-      directoryPath,
-      fileName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    await openDocumentFromPath(created.filePath, {
-      reloadExisting: true,
-      updateCurrentDirectory: false
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件失败。'), true);
-  }
-}
-
-async function promptCreateFolderClean(directoryPath: string): Promise<void> {
-  const folderName = await showRenameDialog({
-    title: '新建文件夹',
-    description: '输入要创建的文件夹名称。',
-    defaultValue: '新建文件夹',
-    confirmText: '创建',
-    normalizeValue: async (value) => value
-  });
-
-  if (!folderName) {
-    return;
-  }
-
-  try {
-    const created = await invoke<PathEntryPayload>('create_folder_in_directory', {
-      directoryPath,
-      folderName
-    });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    showHeaderNotice(`已创建文件夹：${created.name}`);
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建文件夹失败。'), true);
-  }
-}
-
-async function duplicateSidebarPathClean(path: string): Promise<void> {
-  try {
-    const duplicated = await invoke<PathEntryPayload>('duplicate_fs_entry', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-
-    if (duplicated.isDirectory) {
-      showHeaderNotice(`已创建副本：${duplicated.name}`);
-      return;
-    }
-
-    await openDocumentFromPath(duplicated.path, {
-      reloadExisting: true,
-      updateCurrentDirectory: false
-    });
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '创建副本失败。'), true);
-  }
-}
-
-async function moveSidebarPathToRecycleBinClean(path: string): Promise<void> {
-  const openDocuments = getOpenDocumentsWithinPath(path);
-
-  if (openDocuments.some((document) => isDocumentUnsaved(document))) {
-    showHeaderNotice('请先保存或关闭相关文档，再删除。', true);
-    return;
-  }
-
-  if (!window.confirm('确定将所选项目移到回收站吗？')) {
-    return;
-  }
-
-  for (const document of openDocuments) {
-    await closeDocument(document.id);
-  }
-
-  try {
-    await invoke('move_path_to_recycle_bin', { path });
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '删除失败。'), true);
-  }
-}
-
-async function renameSidebarFileClean(
-  target: Extract<SidebarContextTarget, { kind: 'file' }>
-): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: '重命名文件',
-    description: '修改当前文件名称。',
-    defaultValue: target.fileName,
-    confirmText: '重命名',
-    normalizeValue: async (value) =>
-      await invoke<string>('validate_markdown_file_name', {
-        newName: value
-      })
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<OpenedDocument>('rename_markdown_file', {
-      path: target.filePath,
-      newName: renameResult
-    });
-    const openDocument = documents.find((document) => document.filePath === target.filePath);
-
-    if (openDocument) {
-      applyRenamedDocumentState(openDocument, renamed);
-    }
-
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名失败。'), true);
-  }
-}
-
-async function renameSidebarFolderClean(
-  target: Extract<SidebarContextTarget, { kind: 'folder' }>
-): Promise<void> {
-  const renameResult = await showRenameDialog({
-    title: target.isRoot ? '重命名根目录' : '重命名文件夹',
-    description: '修改当前文件夹名称。',
-    defaultValue: target.name,
-    confirmText: '重命名',
-    normalizeValue: async (value) => value
-  });
-
-  if (!renameResult) {
-    return;
-  }
-
-  try {
-    const renamed = await invoke<RenamedDirectoryPayload>('rename_directory', {
-      path: target.path,
-      newName: renameResult
-    });
-    updateDocumentsAfterDirectoryRename(renamed.oldPath, renamed.newPath);
-    await refreshCurrentDirectoryFiles(currentDirectoryPath);
-    renderDocumentHeader();
-    requestSidebarRefreshForCurrentMode();
-  } catch (error) {
-    showHeaderNotice(getErrorMessage(error, '重命名文件夹失败。'), true);
-  }
-}
-
-function buildSidebarContextMenuItemsClean(target: SidebarContextTarget): ContextMenuItem[] {
-  if (target.sidebarMode === OUTLINE_MODE) {
-    return [{ kind: 'item', label: '搜索', action: () => openFilesSidebarSearch() }];
-  }
-
-  const directoryPath = getSidebarTargetDirectoryPath(target);
-  const filePath =
-    target.kind === 'file' ? target.filePath : target.kind === 'folder' ? target.path : target.directoryPath;
-  const items: ContextMenuItem[] = [
-    {
-      kind: 'item',
-      label: '在新窗口中打开',
-      enabled: Boolean(filePath),
-      action: async () => {
-        if (!filePath) {
-          return;
-        }
-
-        await openTargetInNewWindowClean(
-          target.kind === 'file'
-            ? { filePath, directoryPath: target.directoryPath }
-            : { directoryPath: filePath }
-        );
-      }
-    },
-    { kind: 'separator' },
-    {
-      kind: 'item',
-      label: '新建文件',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateMarkdownFileClean(directoryPath);
-        }
-      }
-    },
-    {
-      kind: 'item',
-      label: '新建文件夹',
-      enabled: Boolean(directoryPath),
-      action: async () => {
-        if (directoryPath) {
-          await promptCreateFolderClean(directoryPath);
-        }
-      }
-    },
-    { kind: 'separator' },
-    {
-      kind: 'item',
-      label: '搜索',
-      action: () => openFilesSidebarSearch()
-    }
-  ];
-
-  if (target.kind !== 'blank') {
-    items.push(
-      { kind: 'separator' },
-      {
-        kind: 'item',
-        label: '重命名',
-        enabled: target.kind !== 'file' || Boolean(target.filePath || target.documentId),
-        action: async () => {
-          if (target.kind === 'file') {
-            if (!target.filePath && target.documentId) {
-              await activateDocument(target.documentId);
-              await handleRenameRequest();
-              return;
-            }
-
-            await renameSidebarFileClean(target);
-            return;
-          }
-
-          await renameSidebarFolderClean(target);
-        }
-      },
-      {
-        kind: 'item',
-        label: '创建副本',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await duplicateSidebarPathClean(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '删除',
-        danger: true,
-        enabled:
-          (Boolean(filePath) || (target.kind === 'file' && Boolean(target.documentId))) &&
-          !(target.kind === 'folder' && target.isRoot),
-        action: async () => {
-          if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await closeDocument(target.documentId);
-            return;
-          }
-
-          if (filePath) {
-            await moveSidebarPathToRecycleBinClean(filePath);
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '复制文件路径',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await copyTextToClipboard(filePath, '已复制文件路径。');
-          }
-        }
-      },
-      {
-        kind: 'item',
-        label: '打开文件位置',
-        enabled: Boolean(filePath),
-        action: async () => {
-          if (filePath) {
-            await revealPath(filePath);
-          }
-        }
-      }
-    );
-  }
-
-  return items;
-}
-
-function buildParagraphContextItemsClean(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '正文', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.paragraph), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.paragraph) },
-    { kind: 'item', label: '一级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading1), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading1) },
-    { kind: 'item', label: '二级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading2), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading2) },
-    { kind: 'item', label: '三级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading3), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading3) },
-    { kind: 'item', label: '四级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading4), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading4) },
-    { kind: 'item', label: '五级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading5), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading5) },
-    { kind: 'item', label: '六级标题', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.heading6), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.heading6) },
-    { kind: 'separator' },
-    { kind: 'item', label: '标题升级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingPromote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingPromote) },
-    { kind: 'item', label: '标题降级', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.headingDemote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.headingDemote) },
-    { kind: 'separator' },
-    { kind: 'item', label: '引用', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.blockquote), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.blockquote) },
-    { kind: 'item', label: '有序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.orderedList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.orderedList) },
-    { kind: 'item', label: '无序列表', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.bulletList), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.bulletList) },
-    { kind: 'item', label: '代码块', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.codeBlock), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.codeBlock) },
-    { kind: 'item', label: '插入表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableInsert), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableInsert) }
-  ];
-}
-
-function buildFormatContextItemsClean(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '粗体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrong), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrong) },
-    { kind: 'item', label: '斜体', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineEmphasis), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineEmphasis) },
-    { kind: 'item', label: '删除线', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineStrike), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineStrike) },
-    { kind: 'item', label: '行内代码', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineCode), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineCode) },
-    { kind: 'item', label: '高亮', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
-    { kind: 'item', label: '上标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
-    { kind: 'item', label: '下标', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
-    { kind: 'item', label: '按键', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
-  ];
-}
-
-function buildTableContextItemsClean(): ContextMenuItem[] {
-  return [
-    { kind: 'item', label: '上方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowAbove), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowAbove) },
-    { kind: 'item', label: '下方插入行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowBelow), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowBelow) },
-    { kind: 'item', label: '左侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColLeft) },
-    { kind: 'item', label: '右侧插入列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColRight) },
-    { kind: 'separator' },
-    { kind: 'item', label: '行上移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowUp), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowUp) },
-    { kind: 'item', label: '行下移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableRowDown), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableRowDown) },
-    { kind: 'item', label: '列左移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveLeft), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveLeft) },
-    { kind: 'item', label: '列右移', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableColMoveRight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableColMoveRight) },
-    { kind: 'separator' },
-    { kind: 'item', label: '删除行', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteRow), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteRow) },
-    { kind: 'item', label: '删除列', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDeleteCol), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDeleteCol) },
-    { kind: 'item', label: '删除表格', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.tableDelete), danger: true, action: () => executeEditorCommand(EDITOR_COMMAND_IDS.tableDelete) }
-  ];
-}
-
-function buildEditorContextMenuItemsClean(): ContextMenuItem[] {
-  const context = readCurrentEditorCommandContext();
-  const hasSelection =
-    editorViewMode === 'source'
-      ? sourceTextarea.selectionStart !== sourceTextarea.selectionEnd
-      : context.hasSelection;
-  const items: ContextMenuItem[] = [
-    { kind: 'item', label: '撤销', enabled: context.canUndo, action: () => executeEditCommand('undo') },
-    { kind: 'item', label: '恢复', enabled: context.canRedo, action: () => executeEditCommand('redo') },
-    { kind: 'separator' },
-    { kind: 'item', label: '剪切', enabled: hasSelection, action: async () => performEditorCut() },
-    { kind: 'item', label: '复制', enabled: hasSelection, action: async () => performEditorCopy() },
-    { kind: 'item', label: '粘贴', action: async () => performEditorPaste() },
-    { kind: 'item', label: '全选', action: () => performEditorSelectAll() },
-    { kind: 'separator' },
-    { kind: 'item', label: '查找', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('find') },
-    { kind: 'item', label: '替换', enabled: Boolean(context.activeDocument), action: () => executeEditCommand('replace') }
-  ];
-
-  if (editorViewMode === 'rendered') {
-    items.push(
-      { kind: 'separator' },
-      { kind: 'item', label: '段落', submenu: buildParagraphContextItemsClean() },
-      { kind: 'item', label: '格式', submenu: buildFormatContextItemsClean() }
-    );
-
-    if (context.isInTable) {
-      items.push({ kind: 'item', label: '表格', submenu: buildTableContextItemsClean() });
-    }
-  }
-
-  return items;
-}
-
-function renderEditorEmptyState(): void {
-  void destroyAllMilkdownSessions();
-  closeFindReplaceBar();
-  clearHeadingMarkerOverlay();
-  clearHeadingTargetHighlight();
-  content.className = 'viewer-content viewer-content-empty';
-  content.replaceChildren();
-
-  const emptyText = document.createElement('p');
-  emptyText.className = 'viewer-line viewer-empty-text';
-  emptyText.textContent =
-    '\u5f53\u524d\u6ca1\u6709\u6fc0\u6d3b\u7684 Markdown \u6587\u6863\u3002';
-
-  const emptyHint = document.createElement('p');
-  emptyHint.className = 'viewer-line viewer-empty-text';
-  emptyHint.textContent =
-    '\u53ef\u4ee5\u901a\u8fc7\u201c\u6587\u4ef6 -> \u65b0\u5efa\u201d\u6216\u201c\u6587\u4ef6 -> \u6253\u5f00\u201d\u5f00\u59cb\u3002';
-
-  content.append(emptyText, emptyHint);
-  renderStatusBar();
-}
-
-function renderSourceEditor(documentState: DocumentState): void {
-  clearHeadingMarkerOverlay();
-  clearHeadingTargetHighlight();
-  content.className = 'viewer-content viewer-content-source';
-
-  if (sourceEditorShell.parentElement !== content) {
-    content.replaceChildren(sourceEditorShell);
-  }
-
-  if (sourceTextarea.value !== documentState.content) {
-    sourceTextarea.value = documentState.content;
-  }
-
-  setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: false });
-  restoreSourceEditorContext(documentState);
-  sourceTextarea.focus();
-  renderStatusBar();
-}
-
-function createMilkdownHost(documentId: string): HTMLDivElement {
-  const host = document.createElement('div');
-  host.className = 'milkdown-host';
-  host.addEventListener('pointerdown', (event) => {
-    handleTrailingCodeBlockPointerDown(event, documentId);
-  });
-  host.addEventListener('pointerup', () => {
-    scheduleHeadingMarkerRefresh(documentId);
-  });
-  host.addEventListener('click', () => {
-    scheduleHeadingMarkerRefresh(documentId);
-  });
-
-  return host;
-}
-
-function createMilkdownEditorForDocument(documentState: DocumentState, host: HTMLDivElement): Editor {
-  const documentId = documentState.id;
-
-  return Editor.make()
-    .config(nord)
-    .config((ctx) => {
-      ctx.set(rootCtx, host);
-      ctx.set(defaultValueCtx, documentState.content);
-      ctx.update(remarkStringifyOptionsCtx, (options) => ({
-        ...options,
-        handlers: extendInlineHtmlRemarkHandlers(options.handlers as Record<string, unknown> | undefined)
-      }));
-      ctx.update(prosePluginsCtx, (plugins) => [
-        ...plugins,
-        proseHistory(),
-        createCodeBlockHighlightPlugin(),
-        createTrailingCodeBlockExitPlugin(documentId)
-      ]);
-      ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
-        const targetDocument = documents.find((item) => item.id === documentId);
-
-        if (!targetDocument || activeDocumentId !== documentId) {
-          return;
-        }
-
-        applyMilkdownMarkdownUpdate(targetDocument, markdown);
-      }).updated(() => {
-        if (activeDocumentId === documentId) {
-          scheduleOutlineSidebarRefresh(documentId);
-          renderHeadingMarkerOverlay(documentId);
-        }
-      }).selectionUpdated((_ctx, selection) => {
-        if (activeDocumentId === documentId) {
-          const targetDocument = documents.find((item) => item.id === documentId);
-
-          if (targetDocument) {
-            rememberMilkdownSelection(targetDocument, selection);
-          }
-
-          renderHeadingMarkerOverlay(documentId);
-          scheduleOutlineActiveStateRefresh(documentId);
-          scheduleNativeMenuStateSync();
-        }
-      });
-    })
-    .use(listener)
-    .use(madoInlineHtmlSupport)
-    .use(commonmark)
-    .use(gfm);
-}
-
-async function ensureMilkdownSession(
-  documentState: DocumentState
-): Promise<MilkdownSessionCreationResult> {
-  const existingSession = getMilkdownSession(documentState.id);
-
-  if (existingSession && existingSession.markdownSnapshot === documentState.content) {
-    return { kind: 'ready', session: existingSession };
-  }
-
-  const staleSession = existingSession ?? null;
-  const prepareToken = beginMilkdownSessionPrepare(documentState.id);
-  const documentId = documentState.id;
-  const surface = createEditorSurface(documentId);
-  const host = createMilkdownHost(documentId);
-  surface.append(host);
-
-  if (editorSurfaceStack.parentElement === content) {
-    editorSurfaceStack.append(surface);
-  }
-
-  const editor = createMilkdownEditorForDocument(documentState, host);
-
-  try {
-    const createdEditor = await editor.create();
-
-    if (!isCurrentMilkdownSessionPrepare(documentId, prepareToken)) {
-      await createdEditor.destroy();
-      surface.remove();
-      return { kind: 'stale' };
-    }
-
-    const marker = createHeadingMarkerOverlay(host, documentId);
-    const session: MilkdownSession = {
-      documentId,
-      editor: createdEditor,
-      surface,
-      host,
-      markdownSnapshot: documentState.content,
-      hasPendingChanges: false,
-      scrollTop: documentState.editorScrollTop,
-      scrollLeft: documentState.editorScrollLeft,
-      headingMarkerOverlay: marker.overlay,
-      headingMarkerBadge: marker.badge,
-      headingMarkerMenu: marker.menu,
-      headingMarkerMenuOpen: false,
-      activeHeadingMarkerState: null,
-      lastUsedAt: Date.now()
-    };
-
-    milkdownSessions.set(documentId, session);
-    markMilkdownSynchronized(documentId, documentState.content);
-    if (staleSession) {
-      persistMilkdownSessionState(staleSession);
-      staleSession.surface.remove();
-      void destroyMilkdownEditorInstance(staleSession.editor);
-    }
-
-    return { kind: 'ready', session };
-  } catch {
-    surface.remove();
-    void destroyMilkdownEditorInstance(editor);
-
-    return { kind: 'failed' };
-  }
-}
-
-async function renderMilkdownEditor(
-  documentState: DocumentState,
-  activationToken: number = milkdownActivationToken
-): Promise<void> {
-  if (editorViewMode !== 'rendered') {
-    return;
-  }
-
-  persistActiveMilkdownSessionState();
-
-  const sessionResult = await ensureMilkdownSession(documentState);
-
-  if (
-    editorViewMode !== 'rendered' ||
-    !isCurrentMilkdownActivation(activationToken) ||
-    activeDocumentId !== documentState.id
-  ) {
-    return;
-  }
-
-  if (sessionResult.kind !== 'ready') {
-    if (sessionResult.kind === 'failed') {
-      showHeaderNotice('Milkdown \u7f16\u8f91\u5668\u521d\u59cb\u5316\u5931\u8d25\u3002', true);
-      renderDocumentHeader();
-    }
-
-    return;
-  }
-
-  bindMilkdownSession(sessionResult.session);
-  setActiveEditorSurface(sessionResult.session);
-  restoreMilkdownSessionScroll(sessionResult.session);
-  requestSidebarRefreshForCurrentMode();
-  scheduleNativeMenuStateSync();
-  renderHeadingMarkerOverlay(documentState.id);
-  scheduleOutlineActiveStateRefresh(documentState.id);
-  pruneMilkdownSessionCache(documentState.id);
-  if (findReplaceOpen) {
-    recomputeFindReplaceMatches();
-    renderFindReplaceBar();
-  }
-}
-
-function activatePreparedDocument(
-  documentState: DocumentState,
-  session: MilkdownSession,
-  activationToken: number
-): void {
-  if (!isCurrentMilkdownActivation(activationToken)) {
-    return;
-  }
-
-  upsertDocument(documentState);
-  upsertRecentFile(documentState);
-  activeDocumentId = documentState.id;
-  touchDocument(documentState);
-
-  if (editorViewMode !== 'rendered') {
-    requestRender({ editor: true, activationToken });
-    requestSidebarRefreshForCurrentMode();
-    renderStatusBar();
-    return;
-  }
-
-  bindMilkdownSession(session);
-  setActiveEditorSurface(session);
-  restoreMilkdownSessionScroll(session);
-  renderDocumentHeader();
-  requestSidebarRefreshForCurrentMode();
-  renderHeadingMarkerOverlay(documentState.id);
-  scheduleOutlineActiveStateRefresh(documentState.id);
-  pruneMilkdownSessionCache(documentState.id);
-}
-
-function renderActiveDocument(activationToken: number = milkdownActivationToken): void {
-  renderDocumentHeader();
-
-  const activeDocument = getActiveDocument();
-
-  if (!activeDocument) {
-    renderEditorEmptyState();
-    return;
-  }
-
-  if (editorViewMode === 'source') {
-    renderSourceEditor(activeDocument);
-    return;
-  }
-
-  void renderMilkdownEditor(activeDocument, activationToken);
-}
-
-function upsertDocument(document: DocumentState): void {
-  const index = documents.findIndex((item) => item.id === document.id);
-
-  if (index >= 0) {
-    documents[index] = document;
-    return;
-  }
-
-  documents = [...documents, document];
-}
-
-function applyOpenedDocumentState(document: DocumentState, opened: OpenedDocument): void {
-  document.fileName = opened.fileName;
-  document.filePath = opened.filePath;
-  document.directoryPath = opened.directoryPath;
-  document.content = opened.content;
-  document.savedContent = opened.content;
-  document.sourceSnapshot = createMarkdownSourceSnapshot(opened.content);
-  document.headingStyles = [];
-  document.isDirty = false;
-  document.isUntitled = false;
-  document.editorScrollTop = 0;
-  document.editorScrollLeft = 0;
-  document.editorSelectionFrom = 0;
-  document.editorSelectionTo = 0;
-  document.editorSelectionJson = null;
-  document.sourceSelectionStart = 0;
-  document.sourceSelectionEnd = 0;
-  document.sourceScrollTop = 0;
-  setSourceHistorySnapshot(document.id, opened.content, { resetStacks: true });
-}
-
-function createDocumentState(document: OpenedDocument): DocumentState {
-  const now = Date.now();
-
-  const state: DocumentState = {
-    id: nextDocumentId(),
-    fileName: document.fileName,
-    filePath: document.filePath,
-    directoryPath: document.directoryPath,
-    content: document.content,
-    savedContent: document.content,
-    sourceSnapshot: createMarkdownSourceSnapshot(document.content),
-    headingStyles: [],
-    isDirty: false,
-    isUntitled: false,
-    lastViewedAt: now,
-    listOrder: nextListOrder(),
-    editorScrollTop: 0,
-    editorScrollLeft: 0,
-    editorSelectionFrom: 0,
-    editorSelectionTo: 0,
-    editorSelectionJson: null,
-    sourceSelectionStart: 0,
-    sourceSelectionEnd: 0,
-    sourceScrollTop: 0
-  };
-
-  setSourceHistorySnapshot(state.id, document.content, { resetStacks: true });
-  return state;
-}
-
-function handleOpenDocumentFailure(filePath: string): void {
-  removeRecentFile(filePath);
-  showHeaderNotice(
-    '\u65e0\u6cd5\u6253\u5f00\u8be5\u6587\u4ef6\uff0c\u5b83\u5df2\u4ece\u5386\u53f2\u5217\u8868\u4e2d\u79fb\u9664\u3002',
-    true
-  );
-}
-
-async function activateDocument(
-  documentId: string,
-  activationToken: number = beginMilkdownActivation()
-): Promise<void> {
-  syncActiveDocumentFromEditor();
-  closeFindReplaceBar();
-
-  if (!isCurrentMilkdownActivation(activationToken)) {
-    return;
-  }
-
-  const activeDocument = documents.find((document) => document.id === documentId);
-
-  if (!activeDocument) {
-    return;
-  }
-
-  activeDocumentId = documentId;
-  touchDocument(activeDocument);
-  requestRender({ editor: true, activationToken });
-}
-
-async function openDocumentFromPath(
-  filePath: string,
-  options: { reloadExisting?: boolean; updateCurrentDirectory?: boolean } = {}
-): Promise<void> {
-  const reloadExisting = options.reloadExisting ?? true;
-  const updateCurrentDirectory = options.updateCurrentDirectory ?? true;
-  const activationToken = beginMilkdownActivation();
-
-  syncActiveDocumentFromEditor();
-  closeFindReplaceBar();
-
-  const existingDocument = documents.find((document) => document.filePath === filePath);
-
-  if (existingDocument) {
-    if (reloadExisting && !existingDocument.isDirty) {
-      try {
-        const opened = await invoke<OpenedDocument>('open_markdown_file', { path: filePath });
-        if (!isCurrentMilkdownActivation(activationToken)) {
-          return;
-        }
-        applyOpenedDocumentState(existingDocument, opened);
-      } catch {
-        if (isCurrentMilkdownActivation(activationToken)) {
-          handleOpenDocumentFailure(filePath);
-        }
-        return;
-      }
-    } else if (reloadExisting && existingDocument.isDirty) {
-      if (isCurrentMilkdownActivation(activationToken)) {
-        showHeaderNotice(
-          '\u8be5\u6587\u4ef6\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u6709\u672a\u4fdd\u5b58\u4fee\u6539\uff0c\u5df2\u4fdd\u7559\u4f1a\u8bdd\u7248\u672c\u3002',
-          true
-        );
-      }
-    }
-
-    await activateDocument(existingDocument.id, activationToken);
-
-    if (updateCurrentDirectory) {
-      await setCurrentDirectoryFromFilePath(filePath, { activationToken });
-    }
-
-    if (!isCurrentMilkdownActivation(activationToken)) {
-      return;
-    }
-
-    upsertRecentFile(existingDocument);
-
-    return;
-  }
-
-  try {
-    const document = await invoke<OpenedDocument>('open_markdown_file', { path: filePath });
-    if (!isCurrentMilkdownActivation(activationToken)) {
-      return;
-    }
-
-    const documentState = createDocumentState(document);
-
-    if (editorViewMode === 'source') {
-      upsertDocument(documentState);
-      activeDocumentId = documentState.id;
-      touchDocument(documentState);
-      upsertRecentFile(documentState);
-      requestRender({ editor: true, activationToken });
-      requestSidebarRefreshForCurrentMode();
-
-      if (updateCurrentDirectory) {
-        await setCurrentDirectoryFromFilePath(filePath, { activationToken });
-      }
-
-      return;
-    }
-
-    const sessionResult = await ensureMilkdownSession(documentState);
-
-    if (sessionResult.kind === 'failed') {
-      if (isCurrentMilkdownActivation(activationToken)) {
-        showHeaderNotice('Milkdown \u7f16\u8f91\u5668\u521d\u59cb\u5316\u5931\u8d25\u3002', true);
-      }
-
-      return;
-    }
-
-    if (sessionResult.kind !== 'ready') {
-      return;
-    }
-
-    if (!isCurrentMilkdownActivation(activationToken)) {
-      void destroyMilkdownSession(documentState.id);
-      return;
-    }
-
-    activatePreparedDocument(documentState, sessionResult.session, activationToken);
-
-    if (updateCurrentDirectory) {
-    await setCurrentDirectoryFromFilePath(filePath, { activationToken });
-    }
-
-    if (!isCurrentMilkdownActivation(activationToken)) {
-      return;
-    }
-  } catch {
-    if (isCurrentMilkdownActivation(activationToken)) {
-      handleOpenDocumentFailure(filePath);
-    }
-  }
-}
-
-function createUntitledDocument(): void {
-  syncActiveDocumentFromEditor();
-  closeFindReplaceBar();
-  const activationToken = beginMilkdownActivation();
-
-  const now = Date.now();
-  const documentState: DocumentState = {
-    id: nextDocumentId(),
-    fileName: UNTITLED_FILE_NAME,
-    filePath: null,
-    directoryPath: null,
-    content: '',
-    savedContent: '',
-    sourceSnapshot: createMarkdownSourceSnapshot(''),
-    headingStyles: [],
-    isDirty: true,
-    isUntitled: true,
-    lastViewedAt: now,
-    listOrder: nextListOrder(),
-    editorScrollTop: 0,
-    editorScrollLeft: 0,
-    editorSelectionFrom: 0,
-    editorSelectionTo: 0,
-    editorSelectionJson: null,
-    sourceSelectionStart: 0,
-    sourceSelectionEnd: 0,
-    sourceScrollTop: 0
-  };
-
-  setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: true });
-  upsertDocument(documentState);
-  activeDocumentId = documentState.id;
-  requestRender({ editor: true, activationToken });
-  requestSidebarRefreshForCurrentMode();
-}
-
-function isPathOpenByOtherDocument(filePath: string, currentDocumentId: string | null): boolean {
-  return documents.some(
-    (document) => document.filePath === filePath && document.id !== currentDocumentId
-  );
+  await closeDocument(documentId, { skipDirtyConfirm: true });
 }
 
 async function validateMarkdownSavePath(filePath: string): Promise<string | null> {
@@ -10213,7 +7644,7 @@ async function validateMarkdownSavePath(filePath: string): Promise<string | null
     });
   } catch (error) {
     showHeaderNotice(
-      typeof error === 'string' && error.length > 0 ? error : '保存路径无效。',
+      typeof error === 'string' && error.length > 0 ? error : '\u4fdd\u5b58\u8def\u5f84\u65e0\u6548\u3002',
       true
     );
     return null;
@@ -10224,42 +7655,6 @@ function setRenameDialogValidationState(pending: boolean): void {
   renameDialogValidationPending = pending;
   renameDialogConfirm.disabled = pending;
   renameDialogConfirm.textContent = pending ? '\u68c0\u67e5\u4e2d...' : (renameDialogConfirm.dataset.defaultText ?? renameDialogConfirm.textContent);
-}
-
-async function validateSelectedSavePath(filePath: string): Promise<string | null> {
-  return await validateMarkdownSavePath(filePath);
-
-  /*
-  try {
-    return await invoke<string>('validate_markdown_save_path', {
-      path: filePath
-    });
-  } catch (error) {
-    showHeaderNotice(
-      typeof error === 'string' && error.length > 0 ? error : '保存路径无效。',
-      true
-    );
-    return null;
-  }
-  */
-}
-
-async function validateSavePathFromDialog(filePath: string): Promise<string | null> {
-  return await validateMarkdownSavePath(filePath);
-
-  /*
-  try {
-    return await invoke<string>('validate_markdown_save_path', {
-      path: filePath
-    });
-  } catch (error) {
-    showHeaderNotice(
-      typeof error === 'string' && error.length > 0 ? error : '保存路径无效。',
-      true
-    );
-    return null;
-  }
-  */
 }
 
 async function submitRenameDialog(): Promise<void> {
@@ -10632,6 +8027,763 @@ async function handleRenameRequest(): Promise<void> {
   } catch {
     showHeaderNotice('\u91cd\u547d\u540d\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u6587\u4ef6\u540d\u662f\u5426\u5df2\u5b58\u5728\u3002', true);
   }
+}
+
+function flattenFileTreeRows(node: FileTreeNode, depth = 0): FileTreeRow[] {
+  const rows: FileTreeRow[] = [
+    {
+      key: node.key,
+      kind: node.kind,
+      name: node.name,
+      relativePath: node.relativePath,
+      filePath: node.filePath,
+      documentId: node.documentId,
+      isActive: node.isActive,
+      isDirty: node.isDirty,
+      isOpen: node.isOpen,
+      isExpanded: node.isExpanded,
+      hasChildren: node.children.length > 0,
+      depth
+    }
+  ];
+
+  if (!node.isExpanded) {
+    return rows;
+  }
+
+  for (const child of node.children) {
+    rows.push(...flattenFileTreeRows(child, depth + 1));
+  }
+
+  return rows;
+}
+function handleFileTreeRowAction(button: HTMLButtonElement): void {
+  const kind = button.dataset.kind as FileTreeNodeKind | undefined;
+
+  if (!kind) {
+    return;
+  }
+
+  if (kind === 'file') {
+    const documentId = button.dataset.documentId || '';
+    const filePath = button.dataset.filePath || '';
+
+    if (documentId) {
+      void activateDocument(documentId);
+      return;
+    }
+
+    if (filePath) {
+      void openDocumentFromPath(filePath, { updateCurrentDirectory: false });
+    }
+    return;
+  }
+
+  const relativePath = button.dataset.relativePath || '';
+  const expanded = button.dataset.expanded === 'true';
+  setStoredFileTreeExpansion(currentDirectoryPath, relativePath, !expanded);
+  requestFilesSidebarRefresh();
+}
+function createFileTreeRow(item: FileTreeRow): HTMLElement {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'file-tree-row';
+  row.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    handleFileTreeRowAction(row);
+  });
+  row.addEventListener('click', (event) => {
+    if (event.detail === 0) {
+      handleFileTreeRowAction(row);
+    }
+  });
+
+  const twisty = document.createElement('span');
+  twisty.className = 'file-tree-twisty';
+  twisty.setAttribute('aria-hidden', 'true');
+
+  const icon = document.createElement('span');
+  icon.className = 'file-tree-icon';
+  icon.setAttribute('aria-hidden', 'true');
+
+  const label = document.createElement('span');
+  label.className = 'file-tree-label';
+
+  const dirtyDot = document.createElement('span');
+  dirtyDot.className = 'file-tree-dirty-dot';
+  dirtyDot.textContent = '\u25CF';
+  dirtyDot.setAttribute('aria-hidden', 'true');
+
+  row.append(twisty, icon, label, dirtyDot);
+  fileTreeRowParts.set(row, {
+    mainButton: row,
+    twisty,
+    icon,
+    label,
+    dirtyDot
+  });
+  syncFileTreeRow(row, item);
+  return row;
+}
+function syncFileTreeRow(row: HTMLElement, item: FileTreeRow): void {
+  const parts = fileTreeRowParts.get(row);
+
+  if (!parts) {
+    return;
+  }
+
+  row.dataset.kind = item.kind;
+  row.dataset.relativePath = item.relativePath;
+  row.dataset.filePath = item.filePath ?? '';
+  row.dataset.documentId = item.documentId ?? '';
+  row.dataset.expanded = String(item.isExpanded);
+  row.style.setProperty('--tree-depth', String(item.depth));
+  row.classList.toggle('is-root', item.kind === 'root');
+  row.classList.toggle('is-folder', item.kind === 'folder');
+  row.classList.toggle('is-file', item.kind === 'file');
+  row.classList.toggle('has-children', item.hasChildren);
+  row.classList.toggle('is-expanded', item.isExpanded);
+  row.classList.toggle('is-active', item.isActive);
+  row.classList.toggle('is-open', item.isOpen);
+  row.classList.toggle('is-dirty', item.isDirty);
+  row.classList.toggle('is-hidden-name', item.name.startsWith('.'));
+  row.title = item.name;
+  row.setAttribute('aria-selected', String(item.isActive));
+
+  if (item.kind === 'file') {
+    row.removeAttribute('aria-expanded');
+  } else {
+    row.setAttribute('aria-expanded', String(item.isExpanded));
+  }
+
+  row.setAttribute(
+    'aria-label',
+    item.kind === 'file'
+      ? `${item.name}${item.isDirty ? '\uff0c\u672a\u4fdd\u5b58' : ''}`
+      : `${item.name}${item.isExpanded ? '\uff0c\u5df2\u5c55\u5f00' : '\uff0c\u5df2\u6298\u53e0'}`
+  );
+
+  parts.label.textContent = item.name;
+  parts.twisty.textContent = item.hasChildren ? (item.isExpanded ? '\u25be' : '\u25b8') : '';
+  parts.twisty.classList.toggle('is-placeholder', !item.hasChildren);
+  parts.icon.className = `file-tree-icon is-${item.kind}`;
+  parts.dirtyDot.hidden = item.kind !== 'file' || !item.isDirty;
+}
+function renderActiveDocument(activationToken: number = milkdownActivationToken): void {
+  renderDocumentHeader();
+
+  const activeDocument = getActiveDocument();
+
+  if (!activeDocument) {
+    renderEditorEmptyState();
+    return;
+  }
+
+  if (editorViewMode === 'source') {
+    renderSourceEditor(activeDocument);
+    return;
+  }
+
+  void renderMilkdownEditor(activeDocument, activationToken);
+}
+function isPathOpenByOtherDocument(filePath: string, currentDocumentId: string | null): boolean {
+  return documents.some(
+    (document) => document.filePath === filePath && document.id !== currentDocumentId
+  );
+}
+function updateDocumentsAfterDirectoryRename(oldPath: string, newPath: string): void {
+  for (const document of documents) {
+    if (!document.filePath || !document.directoryPath) {
+      continue;
+    }
+
+    if (isPathWithinDirectory(document.filePath, oldPath)) {
+      document.filePath = replacePathPrefix(document.filePath, oldPath, newPath);
+      document.directoryPath = replacePathPrefix(document.directoryPath, oldPath, newPath);
+    }
+  }
+
+  if (currentDirectoryPath && isPathWithinDirectory(currentDirectoryPath, oldPath)) {
+    currentDirectoryPath = replacePathPrefix(currentDirectoryPath, oldPath, newPath);
+    persistCurrentDirectoryPath();
+  }
+}
+function getEditorSelectionText(): string {
+  return getSelectedSearchText();
+}
+async function performEditorCopy(): Promise<void> {
+  const text = getEditorSelectionText();
+
+  if (!text) {
+    return;
+  }
+
+  await copyTextToClipboard(text);
+}
+async function performEditorCut(): Promise<void> {
+  const text = getEditorSelectionText();
+
+  if (!text) {
+    return;
+  }
+
+  await copyTextToClipboard(text);
+
+  if (editorViewMode === 'source') {
+    const start = sourceTextarea.selectionStart;
+    const end = sourceTextarea.selectionEnd;
+    void applySourceDocumentChange(
+      sourceTextarea.value.slice(0, start) + sourceTextarea.value.slice(end),
+      { recordUndo: true, selectionStart: start, selectionEnd: start, scrollTop: sourceTextarea.scrollTop }
+    );
+    return;
+  }
+
+  executeEditorCommandWithActiveSession((_ctx, view) => {
+    const { selection } = view.state;
+
+    if (selection.empty) {
+      return false;
+    }
+
+    view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+    return true;
+  });
+}
+function performEditorSelectAll(): void {
+  if (editorViewMode === 'source') {
+    sourceTextarea.focus();
+    sourceTextarea.select();
+    return;
+  }
+
+  executeEditorCommandWithActiveSession((_ctx, view) => {
+    const selection = TextSelection.create(view.state.doc, 0, view.state.doc.content.size);
+    view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+    return true;
+  });
+}
+function getErrorMessage(error: unknown, fallback: string): string {
+  return typeof error === 'string' && error.length > 0 ? error : fallback;
+}
+async function openDocumentFromPath(
+  filePath: string,
+  options: { reloadExisting?: boolean; updateCurrentDirectory?: boolean } = {}
+): Promise<void> {
+  const reloadExisting = options.reloadExisting ?? true;
+  const updateCurrentDirectory = options.updateCurrentDirectory ?? true;
+  const activationToken = beginMilkdownActivation();
+
+  syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
+
+  const existingDocument = documents.find((document) => document.filePath === filePath);
+
+  if (existingDocument) {
+    if (reloadExisting && !existingDocument.isDirty) {
+      try {
+        const opened = await invoke<OpenedDocument>('open_markdown_file', { path: filePath });
+        if (!isCurrentMilkdownActivation(activationToken)) {
+          return;
+        }
+        applyOpenedDocumentState(existingDocument, opened);
+      } catch {
+        if (isCurrentMilkdownActivation(activationToken)) {
+          handleOpenDocumentFailure(filePath);
+        }
+        return;
+      }
+    } else if (reloadExisting && existingDocument.isDirty) {
+      if (isCurrentMilkdownActivation(activationToken)) {
+        showHeaderNotice(
+          '\u8be5\u6587\u4ef6\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u6709\u672a\u4fdd\u5b58\u4fee\u6539\uff0c\u5df2\u4fdd\u7559\u4f1a\u8bdd\u7248\u672c\u3002',
+          true
+        );
+      }
+    }
+
+    await activateDocument(existingDocument.id, activationToken);
+
+    if (updateCurrentDirectory) {
+      await setCurrentDirectoryFromFilePath(filePath, { activationToken });
+    }
+
+    if (!isCurrentMilkdownActivation(activationToken)) {
+      return;
+    }
+
+    upsertRecentFile(existingDocument);
+
+    return;
+  }
+
+  try {
+    const document = await invoke<OpenedDocument>('open_markdown_file', { path: filePath });
+    if (!isCurrentMilkdownActivation(activationToken)) {
+      return;
+    }
+
+    const documentState = createDocumentState(document);
+
+    if (editorViewMode === 'source') {
+      upsertDocument(documentState);
+      activeDocumentId = documentState.id;
+      touchDocument(documentState);
+      upsertRecentFile(documentState);
+      requestRender({ editor: true, activationToken });
+      requestSidebarRefreshForCurrentMode();
+
+      if (updateCurrentDirectory) {
+        await setCurrentDirectoryFromFilePath(filePath, { activationToken });
+      }
+
+      return;
+    }
+
+    const sessionResult = await ensureMilkdownSession(documentState);
+
+    if (sessionResult.kind === 'failed') {
+      if (isCurrentMilkdownActivation(activationToken)) {
+        showHeaderNotice('Milkdown \u7f16\u8f91\u5668\u521d\u59cb\u5316\u5931\u8d25\u3002', true);
+      }
+
+      return;
+    }
+
+    if (sessionResult.kind !== 'ready') {
+      return;
+    }
+
+    if (!isCurrentMilkdownActivation(activationToken)) {
+      void destroyMilkdownSession(documentState.id);
+      return;
+    }
+
+    activatePreparedDocument(documentState, sessionResult.session, activationToken);
+
+    if (updateCurrentDirectory) {
+    await setCurrentDirectoryFromFilePath(filePath, { activationToken });
+    }
+
+    if (!isCurrentMilkdownActivation(activationToken)) {
+      return;
+    }
+  } catch {
+    if (isCurrentMilkdownActivation(activationToken)) {
+      handleOpenDocumentFailure(filePath);
+    }
+  }
+}
+async function activateDocument(
+  documentId: string,
+  activationToken: number = beginMilkdownActivation()
+): Promise<void> {
+  syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
+
+  if (!isCurrentMilkdownActivation(activationToken)) {
+    return;
+  }
+
+  const activeDocument = documents.find((document) => document.id === documentId);
+
+  if (!activeDocument) {
+    return;
+  }
+
+  activeDocumentId = documentId;
+  touchDocument(activeDocument);
+  requestRender({ editor: true, activationToken });
+}
+function resolveSidebarContextTarget(target: EventTarget | null): SidebarContextTarget {
+  const element = getShortcutEventTargetElement(target);
+
+  if (sidebarMode === OUTLINE_MODE) {
+    return {
+      kind: 'blank',
+      directoryPath: currentDirectoryPath,
+      sidebarMode: OUTLINE_MODE
+    };
+  }
+
+  const row = element?.closest('.file-tree-row') as HTMLElement | null;
+
+  if (!row) {
+    return {
+      kind: 'blank',
+      directoryPath: currentDirectoryPath,
+      sidebarMode
+    };
+  }
+
+  const kind = row.dataset.kind as FileTreeNodeKind;
+
+  if (kind === 'file') {
+    return {
+      kind: 'file',
+      sidebarMode,
+      filePath: row.dataset.filePath || '',
+      documentId: row.dataset.documentId || null,
+      directoryPath: getParentPathFromFilePath(row.dataset.filePath || '') ?? currentDirectoryPath ?? '',
+      fileName: row.querySelector('.file-tree-label')?.textContent ?? row.dataset.filePath ?? ''
+    };
+  }
+
+  return {
+    kind: 'folder',
+    sidebarMode,
+    path: row.dataset.filePath || currentDirectoryPath || '',
+    name: row.querySelector('.file-tree-label')?.textContent ?? getDirectoryLabel(currentDirectoryPath),
+    isRoot: kind === 'root'
+  };
+}
+function createUntitledDocument(): void {
+  syncActiveDocumentFromEditor();
+  closeFindReplaceBar();
+  const activationToken = beginMilkdownActivation();
+
+  const now = Date.now();
+  const documentState: DocumentState = {
+    id: nextDocumentId(),
+    fileName: UNTITLED_FILE_NAME,
+    filePath: null,
+    directoryPath: null,
+    content: '',
+    savedContent: '',
+    sourceSnapshot: createMarkdownSourceSnapshot(''),
+    headingStyles: [],
+    isDirty: true,
+    isUntitled: true,
+    lastViewedAt: now,
+    listOrder: nextListOrder(),
+    editorScrollTop: 0,
+    editorScrollLeft: 0,
+    editorSelectionFrom: 0,
+    editorSelectionTo: 0,
+    editorSelectionJson: null,
+    sourceSelectionStart: 0,
+    sourceSelectionEnd: 0,
+    sourceScrollTop: 0
+  };
+
+  setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: true });
+  upsertDocument(documentState);
+  activeDocumentId = documentState.id;
+  requestRender({ editor: true, activationToken });
+  requestSidebarRefreshForCurrentMode();
+}
+
+function renderEditorEmptyState(): void {
+  void destroyAllMilkdownSessions();
+  closeFindReplaceBar();
+  clearHeadingMarkerOverlay();
+  clearHeadingTargetHighlight();
+  content.className = 'viewer-content viewer-content-empty';
+  content.replaceChildren();
+
+  const emptyText = document.createElement('p');
+  emptyText.className = 'viewer-line viewer-empty-text';
+  emptyText.textContent =
+    '\u5f53\u524d\u6ca1\u6709\u6fc0\u6d3b\u7684 Markdown \u6587\u6863\u3002';
+
+  const emptyHint = document.createElement('p');
+  emptyHint.className = 'viewer-line viewer-empty-text';
+  emptyHint.textContent =
+    '\u53ef\u4ee5\u901a\u8fc7\u201c\u6587\u4ef6 -> \u65b0\u5efa\u201d\u6216\u201c\u6587\u4ef6 -> \u6253\u5f00\u201d\u5f00\u59cb\u3002';
+
+  content.append(emptyText, emptyHint);
+  renderStatusBar();
+}
+function renderSourceEditor(documentState: DocumentState): void {
+  clearHeadingMarkerOverlay();
+  clearHeadingTargetHighlight();
+  content.className = 'viewer-content viewer-content-source';
+
+  if (sourceEditorShell.parentElement !== content) {
+    content.replaceChildren(sourceEditorShell);
+  }
+
+  if (sourceTextarea.value !== documentState.content) {
+    sourceTextarea.value = documentState.content;
+  }
+
+  setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: false });
+  restoreSourceEditorContext(documentState);
+  sourceTextarea.focus();
+  renderStatusBar();
+}
+async function renderMilkdownEditor(
+  documentState: DocumentState,
+  activationToken: number = milkdownActivationToken
+): Promise<void> {
+  if (editorViewMode !== 'rendered') {
+    return;
+  }
+
+  persistActiveMilkdownSessionState();
+
+  const sessionResult = await ensureMilkdownSession(documentState);
+
+  if (
+    editorViewMode !== 'rendered' ||
+    !isCurrentMilkdownActivation(activationToken) ||
+    activeDocumentId !== documentState.id
+  ) {
+    return;
+  }
+
+  if (sessionResult.kind !== 'ready') {
+    if (sessionResult.kind === 'failed') {
+      showHeaderNotice('Milkdown \u7f16\u8f91\u5668\u521d\u59cb\u5316\u5931\u8d25\u3002', true);
+      renderDocumentHeader();
+    }
+
+    return;
+  }
+
+  bindMilkdownSession(sessionResult.session);
+  setActiveEditorSurface(sessionResult.session);
+  restoreMilkdownSessionScroll(sessionResult.session);
+  requestSidebarRefreshForCurrentMode();
+  scheduleNativeMenuStateSync();
+  renderHeadingMarkerOverlay(documentState.id);
+  scheduleOutlineActiveStateRefresh(documentState.id);
+  pruneMilkdownSessionCache(documentState.id);
+  if (findReplaceOpen) {
+    recomputeFindReplaceMatches();
+    renderFindReplaceBar();
+  }
+}
+function applyOpenedDocumentState(document: DocumentState, opened: OpenedDocument): void {
+  document.fileName = opened.fileName;
+  document.filePath = opened.filePath;
+  document.directoryPath = opened.directoryPath;
+  document.content = opened.content;
+  document.savedContent = opened.content;
+  document.sourceSnapshot = createMarkdownSourceSnapshot(opened.content);
+  document.headingStyles = [];
+  document.isDirty = false;
+  document.isUntitled = false;
+  document.editorScrollTop = 0;
+  document.editorScrollLeft = 0;
+  document.editorSelectionFrom = 0;
+  document.editorSelectionTo = 0;
+  document.editorSelectionJson = null;
+  document.sourceSelectionStart = 0;
+  document.sourceSelectionEnd = 0;
+  document.sourceScrollTop = 0;
+  setSourceHistorySnapshot(document.id, opened.content, { resetStacks: true });
+}
+function handleOpenDocumentFailure(filePath: string): void {
+  removeRecentFile(filePath);
+  showHeaderNotice(
+    '\u65e0\u6cd5\u6253\u5f00\u8be5\u6587\u4ef6\uff0c\u5b83\u5df2\u4ece\u5386\u53f2\u5217\u8868\u4e2d\u79fb\u9664\u3002',
+    true
+  );
+}
+function createDocumentState(document: OpenedDocument): DocumentState {
+  const now = Date.now();
+
+  const state: DocumentState = {
+    id: nextDocumentId(),
+    fileName: document.fileName,
+    filePath: document.filePath,
+    directoryPath: document.directoryPath,
+    content: document.content,
+    savedContent: document.content,
+    sourceSnapshot: createMarkdownSourceSnapshot(document.content),
+    headingStyles: [],
+    isDirty: false,
+    isUntitled: false,
+    lastViewedAt: now,
+    listOrder: nextListOrder(),
+    editorScrollTop: 0,
+    editorScrollLeft: 0,
+    editorSelectionFrom: 0,
+    editorSelectionTo: 0,
+    editorSelectionJson: null,
+    sourceSelectionStart: 0,
+    sourceSelectionEnd: 0,
+    sourceScrollTop: 0
+  };
+
+  setSourceHistorySnapshot(state.id, document.content, { resetStacks: true });
+  return state;
+}
+function upsertDocument(document: DocumentState): void {
+  const index = documents.findIndex((item) => item.id === document.id);
+
+  if (index >= 0) {
+    documents[index] = document;
+    return;
+  }
+
+  documents = [...documents, document];
+}
+async function ensureMilkdownSession(
+  documentState: DocumentState
+): Promise<MilkdownSessionCreationResult> {
+  const existingSession = getMilkdownSession(documentState.id);
+
+  if (existingSession && existingSession.markdownSnapshot === documentState.content) {
+    return { kind: 'ready', session: existingSession };
+  }
+
+  const staleSession = existingSession ?? null;
+  const prepareToken = beginMilkdownSessionPrepare(documentState.id);
+  const documentId = documentState.id;
+  const surface = createEditorSurface(documentId);
+  const host = createMilkdownHost(documentId);
+  surface.append(host);
+
+  if (editorSurfaceStack.parentElement === content) {
+    editorSurfaceStack.append(surface);
+  }
+
+  const editor = createMilkdownEditorForDocument(documentState, host);
+
+  try {
+    const createdEditor = await editor.create();
+
+    if (!isCurrentMilkdownSessionPrepare(documentId, prepareToken)) {
+      await createdEditor.destroy();
+      surface.remove();
+      return { kind: 'stale' };
+    }
+
+    const marker = createHeadingMarkerOverlay(host, documentId);
+    const session: MilkdownSession = {
+      documentId,
+      editor: createdEditor,
+      surface,
+      host,
+      markdownSnapshot: documentState.content,
+      hasPendingChanges: false,
+      scrollTop: documentState.editorScrollTop,
+      scrollLeft: documentState.editorScrollLeft,
+      headingMarkerOverlay: marker.overlay,
+      headingMarkerBadge: marker.badge,
+      headingMarkerMenu: marker.menu,
+      headingMarkerMenuOpen: false,
+      activeHeadingMarkerState: null,
+      lastUsedAt: Date.now()
+    };
+
+    milkdownSessions.set(documentId, session);
+    markMilkdownSynchronized(documentId, documentState.content);
+    if (staleSession) {
+      persistMilkdownSessionState(staleSession);
+      staleSession.surface.remove();
+      void destroyMilkdownEditorInstance(staleSession.editor);
+    }
+
+    return { kind: 'ready', session };
+  } catch {
+    surface.remove();
+    void destroyMilkdownEditorInstance(editor);
+
+    return { kind: 'failed' };
+  }
+}
+function activatePreparedDocument(
+  documentState: DocumentState,
+  session: MilkdownSession,
+  activationToken: number
+): void {
+  if (!isCurrentMilkdownActivation(activationToken)) {
+    return;
+  }
+
+  upsertDocument(documentState);
+  upsertRecentFile(documentState);
+  activeDocumentId = documentState.id;
+  touchDocument(documentState);
+
+  if (editorViewMode !== 'rendered') {
+    requestRender({ editor: true, activationToken });
+    requestSidebarRefreshForCurrentMode();
+    renderStatusBar();
+    return;
+  }
+
+  bindMilkdownSession(session);
+  setActiveEditorSurface(session);
+  restoreMilkdownSessionScroll(session);
+  renderDocumentHeader();
+  requestSidebarRefreshForCurrentMode();
+  renderHeadingMarkerOverlay(documentState.id);
+  scheduleOutlineActiveStateRefresh(documentState.id);
+  pruneMilkdownSessionCache(documentState.id);
+}
+
+function createMilkdownHost(documentId: string): HTMLDivElement {
+  const host = document.createElement('div');
+  host.className = 'milkdown-host';
+  host.addEventListener('pointerdown', (event) => {
+    handleTrailingCodeBlockPointerDown(event, documentId);
+  });
+  host.addEventListener('pointerup', () => {
+    scheduleHeadingMarkerRefresh(documentId);
+  });
+  host.addEventListener('click', () => {
+    scheduleHeadingMarkerRefresh(documentId);
+  });
+
+  return host;
+}
+function createMilkdownEditorForDocument(documentState: DocumentState, host: HTMLDivElement): Editor {
+  const documentId = documentState.id;
+
+  return Editor.make()
+    .config(nord)
+    .config((ctx) => {
+      ctx.set(rootCtx, host);
+      ctx.set(defaultValueCtx, documentState.content);
+      ctx.update(remarkStringifyOptionsCtx, (options) => ({
+        ...options,
+        handlers: extendInlineHtmlRemarkHandlers(options.handlers as Record<string, unknown> | undefined)
+      }));
+      ctx.update(prosePluginsCtx, (plugins) => [
+        ...plugins,
+        proseHistory(),
+        createCodeBlockHighlightPlugin(),
+        createTrailingCodeBlockExitPlugin(documentId)
+      ]);
+      ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+        const targetDocument = documents.find((item) => item.id === documentId);
+
+        if (!targetDocument || activeDocumentId !== documentId) {
+          return;
+        }
+
+        applyMilkdownMarkdownUpdate(targetDocument, markdown);
+      }).updated(() => {
+        if (activeDocumentId === documentId) {
+          scheduleOutlineSidebarRefresh(documentId);
+          renderHeadingMarkerOverlay(documentId);
+        }
+      }).selectionUpdated((_ctx, selection) => {
+        if (activeDocumentId === documentId) {
+          const targetDocument = documents.find((item) => item.id === documentId);
+
+          if (targetDocument) {
+            rememberMilkdownSelection(targetDocument, selection);
+          }
+
+          renderHeadingMarkerOverlay(documentId);
+          scheduleOutlineActiveStateRefresh(documentId);
+          scheduleNativeMenuStateSync();
+        }
+      });
+    })
+    .use(listener)
+    .use(madoInlineHtmlSupport)
+    .use(commonmark)
+    .use(gfm);
 }
 
 void renderActiveDocument();
