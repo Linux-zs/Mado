@@ -1198,7 +1198,7 @@ sourceTextarea.addEventListener('scroll', () => {
 });
 
 findQueryInput.addEventListener('input', () => {
-  recomputeFindReplaceMatches();
+  recomputeFindReplaceMatches({ resetActive: true });
   renderFindReplaceBar();
 });
 
@@ -1768,7 +1768,7 @@ function setEditorViewMode(nextMode: EditorViewMode): void {
   requestRender({ editor: true });
   requestSidebarRefreshForCurrentMode();
   if (findReplaceOpen) {
-    recomputeFindReplaceMatches();
+    recomputeFindReplaceMatches({ resetActive: true });
     renderFindReplaceBar();
   }
   renderStatusBar();
@@ -1950,6 +1950,68 @@ function getActiveFindMatch(): FindMatch | null {
   return findReplaceMatches[findReplaceActiveIndex] ?? null;
 }
 
+function getFindMatchStart(match: FindMatch): number {
+  return match.kind === 'source' ? match.start : match.from;
+}
+
+function getFindMatchEnd(match: FindMatch): number {
+  return match.kind === 'source' ? match.end : match.to;
+}
+
+function findFindMatchIndex(matches: FindMatch[], target: FindMatch): number {
+  if (target.kind === 'source') {
+    return matches.findIndex(
+      (candidate) =>
+        candidate.kind === 'source' &&
+        candidate.start === target.start &&
+        candidate.end === target.end
+    );
+  }
+
+  return matches.findIndex((candidate) => {
+    return candidate.kind === 'rendered' && candidate.from === target.from && candidate.to === target.to;
+  });
+}
+
+function findNearestFindMatchIndex(
+  matches: FindMatch[],
+  anchorPosition: number,
+  direction: -1 | 1
+): number {
+  if (matches.length === 0) {
+    return -1;
+  }
+
+  if (direction < 0) {
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const match = matches[index]!;
+
+      if (getFindMatchEnd(match) <= anchorPosition) {
+        return index;
+      }
+    }
+
+    return matches.length - 1;
+  }
+
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]!;
+
+    if (getFindMatchStart(match) >= anchorPosition) {
+      return index;
+    }
+  }
+
+  return matches.length - 1;
+}
+
+type RecomputeFindReplaceOptions = {
+  resetActive?: boolean;
+  anchorMatch?: FindMatch | null;
+  anchorPosition?: number;
+  direction?: -1 | 1;
+};
+
 function revealFindMatch(match: FindMatch, focusEditor = false): void {
   if (match.kind === 'source') {
     sourceTextarea.setSelectionRange(match.start, match.end);
@@ -1984,7 +2046,7 @@ function revealFindMatch(match: FindMatch, focusEditor = false): void {
   }
 }
 
-function recomputeFindReplaceMatches(): void {
+function recomputeFindReplaceMatches(options: RecomputeFindReplaceOptions = {}): void {
   if (!findReplaceOpen) {
     findReplaceMatches = [];
     findReplaceActiveIndex = -1;
@@ -1999,8 +2061,49 @@ function recomputeFindReplaceMatches(): void {
     return;
   }
 
+  const previousActiveIndex = findReplaceActiveIndex;
+  const previousActiveMatch =
+    options.anchorMatch === undefined ? getActiveFindMatch() : options.anchorMatch;
   findReplaceMatches = editorViewMode === 'source' ? getSourceFindMatches(query) : getRenderedFindMatches(query);
-  findReplaceActiveIndex = findReplaceMatches.length > 0 ? 0 : -1;
+
+  if (findReplaceMatches.length === 0) {
+    findReplaceActiveIndex = -1;
+    return;
+  }
+
+  if (options.resetActive) {
+    findReplaceActiveIndex = 0;
+    return;
+  }
+
+  if (previousActiveMatch) {
+    const exactMatchIndex = findFindMatchIndex(findReplaceMatches, previousActiveMatch);
+
+    if (exactMatchIndex >= 0) {
+      findReplaceActiveIndex = exactMatchIndex;
+      return;
+    }
+  }
+
+  const anchorPosition =
+    options.anchorPosition ??
+    (previousActiveMatch ? getFindMatchStart(previousActiveMatch) : null);
+
+  if (anchorPosition !== null) {
+    findReplaceActiveIndex = findNearestFindMatchIndex(
+      findReplaceMatches,
+      anchorPosition,
+      options.direction ?? 1
+    );
+    return;
+  }
+
+  if (previousActiveIndex >= 0) {
+    findReplaceActiveIndex = Math.min(previousActiveIndex, findReplaceMatches.length - 1);
+    return;
+  }
+
+  findReplaceActiveIndex = 0;
 }
 
 function renderFindReplaceBar(): void {
@@ -2039,7 +2142,7 @@ function openFindReplaceBar(mode: FindReplaceMode): void {
     }
   }
 
-  recomputeFindReplaceMatches();
+  recomputeFindReplaceMatches({ resetActive: true });
   renderFindReplaceBar();
   findQueryInput.focus();
   findQueryInput.select();
@@ -2100,6 +2203,7 @@ async function replaceCurrentFindMatch(): Promise<void> {
   }
 
   const replacement = findReplaceInput.value;
+  const anchorPosition = getFindMatchStart(activeMatch);
 
   if (activeMatch.kind === 'source') {
     replaceCurrentSourceMatch(activeMatch, replacement);
@@ -2107,7 +2211,11 @@ async function replaceCurrentFindMatch(): Promise<void> {
     return;
   }
 
-  recomputeFindReplaceMatches();
+  recomputeFindReplaceMatches({
+    anchorMatch: activeMatch,
+    anchorPosition,
+    direction: 1
+  });
   renderFindReplaceBar();
 
   if (findReplaceMatches.length > 0) {
@@ -2148,7 +2256,7 @@ async function replaceAllFindMatches(): Promise<void> {
   }
 
   const replacement = findReplaceInput.value;
-  recomputeFindReplaceMatches();
+  recomputeFindReplaceMatches({ resetActive: true });
 
   if (findReplaceMatches.length === 0) {
     renderFindReplaceBar();
@@ -2167,7 +2275,7 @@ async function replaceAllFindMatches(): Promise<void> {
     }
   }
 
-  recomputeFindReplaceMatches();
+  recomputeFindReplaceMatches({ resetActive: true });
   renderFindReplaceBar();
 }
 
