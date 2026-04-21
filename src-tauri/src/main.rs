@@ -4,6 +4,7 @@ use std::{
   fs,
   io::Read,
   path::{Path, PathBuf},
+  process::Command,
   sync::Mutex,
   time::UNIX_EPOCH,
 };
@@ -107,8 +108,18 @@ struct TextFileEntry {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DirectoryEntry {
+  name: String,
+  path: String,
+  parent_path: String,
+  relative_path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TextFileListResult {
   files: Vec<TextFileEntry>,
+  directories: Vec<DirectoryEntry>,
   is_truncated: bool,
 }
 
@@ -128,7 +139,39 @@ struct TextFileScanLimits {
 
 struct TextFileScanState {
   files: Vec<TextFileEntry>,
+  directories: Vec<DirectoryEntry>,
   is_truncated: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PathEntryPayload {
+  name: String,
+  path: String,
+  parent_path: String,
+  is_directory: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenamedDirectoryPayload {
+  old_path: String,
+  new_path: String,
+  name: String,
+  parent_path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PathPropertiesPayload {
+  name: String,
+  path: String,
+  parent_path: String,
+  item_kind: String,
+  size_bytes: Option<u64>,
+  modified_at: Option<u64>,
+  extension: Option<String>,
+  is_directory: bool,
 }
 
 #[tauri::command]
@@ -234,6 +277,191 @@ fn rename_markdown_file(path: String, new_name: String) -> Result<OpenedDocument
   read_markdown_document(&target_path)
 }
 
+#[tauri::command]
+fn create_markdown_file_in_directory(
+  directory_path: String,
+  file_name: String,
+) -> Result<OpenedDocument, String> {
+  let directory = Path::new(&directory_path);
+
+  if !directory.is_dir() {
+    return Err("The selected directory does not exist.".to_string());
+  }
+
+  let normalized_name = normalize_markdown_file_name(&file_name)?;
+  let file_path = directory.join(normalized_name);
+
+  if file_path.exists() {
+    return Err("The target file already exists.".to_string());
+  }
+
+  fs::write(&file_path, "").map_err(|error| format!("Failed to create file: {error}"))?;
+  read_markdown_document(&file_path)
+}
+
+#[tauri::command]
+fn create_folder_in_directory(
+  directory_path: String,
+  folder_name: String,
+) -> Result<PathEntryPayload, String> {
+  let directory = Path::new(&directory_path);
+
+  if !directory.is_dir() {
+    return Err("The selected directory does not exist.".to_string());
+  }
+
+  let normalized_name = normalize_file_name_component(&folder_name)?;
+  let folder_path = directory.join(&normalized_name);
+
+  if folder_path.exists() {
+    return Err("The target folder already exists.".to_string());
+  }
+
+  fs::create_dir(&folder_path).map_err(|error| format!("Failed to create folder: {error}"))?;
+  build_path_entry_payload(&folder_path)
+}
+
+#[tauri::command]
+fn duplicate_fs_entry(path: String) -> Result<PathEntryPayload, String> {
+  let source_path = Path::new(&path);
+
+  if !source_path.exists() {
+    return Err("The selected path does not exist.".to_string());
+  }
+
+  let target_path = next_available_duplicate_path(source_path)?;
+
+  if source_path.is_dir() {
+    copy_directory_recursive(source_path, &target_path)?;
+  } else {
+    fs::copy(source_path, &target_path).map_err(|error| format!("Failed to duplicate file: {error}"))?;
+  }
+
+  build_path_entry_payload(&target_path)
+}
+
+#[tauri::command]
+fn rename_directory(path: String, new_name: String) -> Result<RenamedDirectoryPayload, String> {
+  let directory_path = Path::new(&path);
+
+  if !directory_path.is_dir() {
+    return Err("The selected path is not a directory.".to_string());
+  }
+
+  let parent_directory = directory_path
+    .parent()
+    .ok_or_else(|| "Could not resolve parent directory.".to_string())?;
+  let normalized_name = normalize_file_name_component(&new_name)?;
+  let target_path = parent_directory.join(&normalized_name);
+
+  if target_path == directory_path {
+    return Ok(RenamedDirectoryPayload {
+      old_path: directory_path.to_string_lossy().into_owned(),
+      new_path: target_path.to_string_lossy().into_owned(),
+      name: normalized_name,
+      parent_path: parent_directory.to_string_lossy().into_owned(),
+    });
+  }
+
+  if target_path.exists() {
+    return Err("The target folder already exists.".to_string());
+  }
+
+  fs::rename(directory_path, &target_path)
+    .map_err(|error| format!("Failed to rename folder: {error}"))?;
+
+  Ok(RenamedDirectoryPayload {
+    old_path: directory_path.to_string_lossy().into_owned(),
+    new_path: target_path.to_string_lossy().into_owned(),
+    name: normalized_name,
+    parent_path: parent_directory.to_string_lossy().into_owned(),
+  })
+}
+
+#[tauri::command]
+fn move_path_to_recycle_bin(path: String) -> Result<(), String> {
+  let target_path = Path::new(&path);
+
+  if !target_path.exists() {
+    return Err("The selected path does not exist.".to_string());
+  }
+
+  trash::delete(target_path).map_err(|error| format!("Failed to move item to recycle bin: {error}"))
+}
+
+#[tauri::command]
+fn reveal_path_in_explorer(path: String) -> Result<(), String> {
+  let target_path = Path::new(&path);
+
+  if !target_path.exists() {
+    return Err("The selected path does not exist.".to_string());
+  }
+
+  #[cfg(windows)]
+  {
+    let status = if target_path.is_dir() {
+      Command::new("explorer")
+        .arg(target_path.as_os_str())
+        .status()
+        .map_err(|error| format!("Failed to open Explorer: {error}"))?
+    } else {
+      Command::new("explorer")
+        .arg(format!("/select,{}", target_path.to_string_lossy()))
+        .status()
+        .map_err(|error| format!("Failed to open Explorer: {error}"))?
+    };
+
+    if !status.success() {
+      return Err("Explorer could not open the selected path.".to_string());
+    }
+
+    return Ok(());
+  }
+
+  #[cfg(not(windows))]
+  {
+    let _ = target_path;
+    Err("This action is currently only supported on Windows.".to_string())
+  }
+}
+
+#[tauri::command]
+fn get_path_properties(path: String) -> Result<PathPropertiesPayload, String> {
+  let target_path = Path::new(&path);
+
+  if !target_path.exists() {
+    return Err("The selected path does not exist.".to_string());
+  }
+
+  let metadata = fs::metadata(target_path).map_err(|error| format!("Failed to read properties: {error}"))?;
+  let name = target_path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .ok_or_else(|| "Could not resolve file name.".to_string())?
+    .to_string();
+  let parent_path = target_path
+    .parent()
+    .and_then(Path::to_str)
+    .unwrap_or("")
+    .to_string();
+  let modified_at = metadata
+    .modified()
+    .ok()
+    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+    .map(|duration| duration.as_secs());
+
+  Ok(PathPropertiesPayload {
+    extension: target_path.extension().and_then(|value| value.to_str()).map(|value| value.to_string()),
+    item_kind: if metadata.is_dir() { "folder".to_string() } else { "file".to_string() },
+    modified_at,
+    name,
+    parent_path,
+    path: target_path.to_string_lossy().into_owned(),
+    size_bytes: if metadata.is_file() { Some(metadata.len()) } else { None },
+    is_directory: metadata.is_dir(),
+  })
+}
+
 fn read_markdown_document(file_path: &Path) -> Result<OpenedDocument, String> {
   let content =
     fs::read_to_string(file_path).map_err(|error| format!("Failed to read file: {error}"))?;
@@ -258,9 +486,104 @@ fn read_markdown_document(file_path: &Path) -> Result<OpenedDocument, String> {
   })
 }
 
+fn build_path_entry_payload(path: &Path) -> Result<PathEntryPayload, String> {
+  let metadata = fs::metadata(path).map_err(|error| format!("Failed to read path metadata: {error}"))?;
+  let name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .ok_or_else(|| "Could not resolve file name.".to_string())?
+    .to_string();
+  let parent_path = path
+    .parent()
+    .and_then(Path::to_str)
+    .unwrap_or("")
+    .to_string();
+
+  Ok(PathEntryPayload {
+    name,
+    path: path.to_string_lossy().into_owned(),
+    parent_path,
+    is_directory: metadata.is_dir(),
+  })
+}
+
+fn next_available_duplicate_path(path: &Path) -> Result<PathBuf, String> {
+  let parent_directory = path
+    .parent()
+    .ok_or_else(|| "Could not resolve parent directory.".to_string())?;
+  let file_name = path
+    .file_name()
+    .and_then(|value| value.to_str())
+    .ok_or_else(|| "Could not resolve file name.".to_string())?;
+
+  if path.is_dir() {
+    for index in 1..10_000 {
+      let suffix = if index == 1 {
+        " copy".to_string()
+      } else {
+        format!(" copy {index}")
+      };
+      let candidate = parent_directory.join(format!("{file_name}{suffix}"));
+
+      if !candidate.exists() {
+        return Ok(candidate);
+      }
+    }
+  } else {
+    let stem = path
+      .file_stem()
+      .and_then(|value| value.to_str())
+      .ok_or_else(|| "Could not resolve file name.".to_string())?;
+    let extension = path.extension().and_then(|value| value.to_str());
+
+    for index in 1..10_000 {
+      let suffix = if index == 1 {
+        " copy".to_string()
+      } else {
+        format!(" copy {index}")
+      };
+      let candidate_name = match extension {
+        Some(extension) => format!("{stem}{suffix}.{extension}"),
+        None => format!("{stem}{suffix}"),
+      };
+      let candidate = parent_directory.join(candidate_name);
+
+      if !candidate.exists() {
+        return Ok(candidate);
+      }
+    }
+  }
+
+  Err("Could not find an available duplicate path.".to_string())
+}
+
+fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+  fs::create_dir(target).map_err(|error| format!("Failed to create duplicate folder: {error}"))?;
+
+  for entry in fs::read_dir(source).map_err(|error| format!("Failed to read directory: {error}"))? {
+    let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
+    let source_path = entry.path();
+    let target_path = target.join(entry.file_name());
+
+    if entry
+      .file_type()
+      .map_err(|error| format!("Failed to read entry type: {error}"))?
+      .is_dir()
+    {
+      copy_directory_recursive(&source_path, &target_path)?;
+    } else {
+      fs::copy(&source_path, &target_path)
+        .map_err(|error| format!("Failed to duplicate file: {error}"))?;
+    }
+  }
+
+  Ok(())
+}
+
 fn list_text_files_with_limits(root: &Path, limits: TextFileScanLimits) -> TextFileListResult {
   let mut state = TextFileScanState {
     files: Vec::new(),
+    directories: Vec::new(),
     is_truncated: false,
   };
 
@@ -268,9 +591,13 @@ fn list_text_files_with_limits(root: &Path, limits: TextFileScanLimits) -> TextF
   state
     .files
     .sort_by(|left, right| left.file_path.cmp(&right.file_path));
+  state
+    .directories
+    .sort_by(|left, right| left.path.cmp(&right.path));
 
   TextFileListResult {
     files: state.files,
+    directories: state.directories,
     is_truncated: state.is_truncated,
   }
 }
@@ -309,6 +636,15 @@ fn collect_text_files(
     if file_type.is_dir() {
       if should_skip_text_scan_directory(&path) {
         continue;
+      }
+
+      if depth + 1 > limits.max_depth {
+        state.is_truncated = true;
+        continue;
+      }
+
+      if let Some(directory) = build_directory_entry(root, &path) {
+        state.directories.push(directory);
       }
 
       collect_text_files(root, &path, depth + 1, limits, state);
@@ -357,6 +693,23 @@ fn build_text_file_entry_with_preview_limit(
     relative_directory,
     modified_at,
     preview,
+  })
+}
+
+fn build_directory_entry(root: &Path, directory_path: &Path) -> Option<DirectoryEntry> {
+  let name = directory_path.file_name()?.to_str()?.to_string();
+  let parent_path = directory_path.parent()?.to_string_lossy().to_string();
+  let relative_path = directory_path
+    .strip_prefix(root)
+    .ok()
+    .map(format_relative_directory)
+    .filter(|label| !label.is_empty() && label != ".")?;
+
+  Some(DirectoryEntry {
+    name,
+    path: directory_path.to_string_lossy().to_string(),
+    parent_path,
+    relative_path,
   })
 }
 
@@ -907,8 +1260,28 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 }
 
 fn emit_app_command<R: Runtime>(app: &AppHandle<R>, payload: AppCommandPayload) {
-  if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, payload) {
-    eprintln!("Failed to emit app command to main webview: {error}");
+  let target_label = app
+    .webview_windows()
+    .into_iter()
+    .find_map(|(label, window)| {
+      if window.is_focused().unwrap_or(false) {
+        Some(label)
+      } else {
+        None
+      }
+    })
+    .unwrap_or_else(|| "main".to_string());
+
+  if let Err(error) = app.emit_to(target_label.as_str(), APP_COMMAND_EVENT, payload.clone()) {
+    if target_label != "main" {
+      if let Err(fallback_error) = app.emit_to("main", APP_COMMAND_EVENT, payload) {
+        eprintln!(
+          "Failed to emit app command to focused window ({error}) and main webview ({fallback_error})."
+        );
+      }
+    } else {
+      eprintln!("Failed to emit app command to main webview: {error}");
+    }
   }
 }
 
@@ -974,6 +1347,13 @@ fn main() {
       list_text_files,
       save_markdown_file,
       rename_markdown_file,
+      create_markdown_file_in_directory,
+      create_folder_in_directory,
+      duplicate_fs_entry,
+      rename_directory,
+      move_path_to_recycle_bin,
+      reveal_path_in_explorer,
+      get_path_properties,
       validate_markdown_file_name,
       validate_markdown_save_path,
       update_recent_files_menu,
@@ -1101,6 +1481,13 @@ mod tests {
     assert!(names.contains(&"visible.md"));
     assert!(names.contains(&"visible.txt"));
     assert!(!names.contains(&"hidden.md"));
+    let directories = result
+      .directories
+      .iter()
+      .map(|directory| directory.relative_path.as_str())
+      .collect::<Vec<_>>();
+    assert!(directories.contains(&"one"));
+    assert!(!directories.contains(&"one/two"));
     assert!(result.is_truncated);
 
     fs::remove_dir_all(root).expect("test directory should be removed");
@@ -1129,6 +1516,36 @@ mod tests {
       .collect::<Vec<_>>();
 
     assert_eq!(names, vec!["note.md"]);
+    assert!(result.directories.is_empty());
+    assert!(!result.is_truncated);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn list_text_files_includes_empty_directories() {
+    let root = create_test_dir("directories");
+    fs::create_dir_all(root.join("empty").join("nested")).expect("directories should be created");
+    write_file(&root.join("notes").join("visible.md"), "visible");
+
+    let result = list_text_files_with_limits(
+      &root,
+      TextFileScanLimits {
+        max_depth: 8,
+        max_files: 10,
+        preview_bytes: 1024,
+      },
+    );
+
+    let directories = result
+      .directories
+      .iter()
+      .map(|directory| directory.relative_path.replace('\\', "/"))
+      .collect::<Vec<_>>();
+
+    assert!(directories.iter().any(|directory| directory == "empty"));
+    assert!(directories.iter().any(|directory| directory == "empty/nested"));
+    assert!(directories.iter().any(|directory| directory == "notes"));
     assert!(!result.is_truncated);
 
     fs::remove_dir_all(root).expect("test directory should be removed");
