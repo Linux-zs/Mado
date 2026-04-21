@@ -269,7 +269,7 @@ fn rename_markdown_file(path: String, new_name: String) -> Result<OpenedDocument
     return read_markdown_document(file_path);
   }
 
-  if target_path.exists() {
+  if target_path.exists() && !is_same_existing_path(file_path, &target_path) {
     return Err("The target file already exists.".to_string());
   }
 
@@ -363,7 +363,7 @@ fn rename_directory(path: String, new_name: String) -> Result<RenamedDirectoryPa
     });
   }
 
-  if target_path.exists() {
+  if target_path.exists() && !is_same_existing_path(directory_path, &target_path) {
     return Err("The target folder already exists.".to_string());
   }
 
@@ -463,8 +463,7 @@ fn get_path_properties(path: String) -> Result<PathPropertiesPayload, String> {
 }
 
 fn read_markdown_document(file_path: &Path) -> Result<OpenedDocument, String> {
-  let content =
-    fs::read_to_string(file_path).map_err(|error| format!("Failed to read file: {error}"))?;
+  let content = read_text_file_lossy(file_path)?;
 
   let file_name = file_path
     .file_name()
@@ -602,6 +601,21 @@ fn list_text_files_with_limits(root: &Path, limits: TextFileScanLimits) -> TextF
   }
 }
 
+fn collect_sorted_directory_entries(directory: &Path) -> Vec<fs::DirEntry> {
+  let Ok(entries) = fs::read_dir(directory) else {
+    return Vec::new();
+  };
+
+  let mut collected = entries.flatten().collect::<Vec<_>>();
+  collected.sort_by(|left, right| {
+    left
+      .path()
+      .to_string_lossy()
+      .cmp(&right.path().to_string_lossy())
+  });
+  collected
+}
+
 fn collect_text_files(
   root: &Path,
   directory: &Path,
@@ -614,16 +628,7 @@ fn collect_text_files(
     return;
   }
 
-  let Ok(entries) = fs::read_dir(directory) else {
-    return;
-  };
-
-  for entry in entries.flatten() {
-    if state.files.len() >= limits.max_files {
-      state.is_truncated = true;
-      return;
-    }
-
+  for entry in collect_sorted_directory_entries(directory) {
     let path = entry.path();
     let Ok(file_type) = entry.file_type() else {
       continue;
@@ -652,6 +657,11 @@ fn collect_text_files(
     }
 
     if !file_type.is_file() || !is_supported_text_file(&path) {
+      continue;
+    }
+
+    if state.files.len() >= limits.max_files {
+      state.is_truncated = true;
       continue;
     }
 
@@ -713,13 +723,22 @@ fn build_directory_entry(root: &Path, directory_path: &Path) -> Option<Directory
   })
 }
 
+fn decode_text_bytes(bytes: &[u8]) -> String {
+  String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn read_text_file_lossy(file_path: &Path) -> Result<String, String> {
+  let bytes = fs::read(file_path).map_err(|error| format!("Failed to read file: {error}"))?;
+  Ok(decode_text_bytes(&bytes))
+}
+
 fn read_limited_text(file_path: &Path, byte_limit: usize) -> std::io::Result<String> {
   let file = fs::File::open(file_path)?;
   let mut reader = file.take(byte_limit as u64);
   let mut buffer = Vec::new();
   reader.read_to_end(&mut buffer)?;
 
-  Ok(String::from_utf8_lossy(&buffer).to_string())
+  Ok(decode_text_bytes(&buffer))
 }
 
 fn should_skip_text_scan_directory(path: &Path) -> bool {
@@ -824,6 +843,21 @@ fn normalize_file_name_component(file_name: &str) -> Result<String, String> {
   }
 
   Ok(trimmed.to_string())
+}
+
+fn is_same_existing_path(source_path: &Path, target_path: &Path) -> bool {
+  #[cfg(windows)]
+  {
+    source_path
+      .to_string_lossy()
+      .to_lowercase()
+      == target_path.to_string_lossy().to_lowercase()
+  }
+
+  #[cfg(not(windows))]
+  {
+    source_path == target_path
+  }
 }
 
 fn is_supported_save_extension(extension: &str) -> bool {
@@ -1435,6 +1469,14 @@ mod tests {
     fs::write(path, content).expect("test file should be written");
   }
 
+  fn write_file_bytes(path: &Path, content: &[u8]) {
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent).expect("parent directory should be created");
+    }
+
+    fs::write(path, content).expect("test file bytes should be written");
+  }
+
   #[test]
   fn list_text_files_marks_result_truncated_at_file_limit() {
     let root = create_test_dir("limit");
@@ -1451,6 +1493,59 @@ mod tests {
     );
 
     assert_eq!(result.files.len(), 1);
+    assert!(result.is_truncated);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn list_text_files_uses_stable_sorted_prefix_when_truncated() {
+    let root = create_test_dir("stable-prefix");
+    write_file(&root.join("z.md"), "z");
+    write_file(&root.join("a.md"), "a");
+    write_file(&root.join("m.md"), "m");
+
+    let result = list_text_files_with_limits(
+      &root,
+      TextFileScanLimits {
+        max_depth: 8,
+        max_files: 1,
+        preview_bytes: 1024,
+      },
+    );
+
+    assert_eq!(result.files.len(), 1);
+    assert_eq!(result.files[0].file_name, "a.md");
+    assert!(result.is_truncated);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn list_text_files_keeps_directories_after_file_limit() {
+    let root = create_test_dir("directories-after-limit");
+    write_file(&root.join("a.md"), "a");
+    write_file(&root.join("b.md"), "b");
+    fs::create_dir_all(root.join("zeta").join("nested")).expect("directories should be created");
+
+    let result = list_text_files_with_limits(
+      &root,
+      TextFileScanLimits {
+        max_depth: 8,
+        max_files: 1,
+        preview_bytes: 1024,
+      },
+    );
+
+    let directories = result
+      .directories
+      .iter()
+      .map(|directory| directory.relative_path.replace('\\', "/"))
+      .collect::<Vec<_>>();
+
+    assert_eq!(result.files.len(), 1);
+    assert!(directories.iter().any(|directory| directory == "zeta"));
+    assert!(directories.iter().any(|directory| directory == "zeta/nested"));
     assert!(result.is_truncated);
 
     fs::remove_dir_all(root).expect("test directory should be removed");
@@ -1561,6 +1656,58 @@ mod tests {
       .expect("entry should be created");
 
     assert_eq!(entry.preview, "first line second");
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn read_markdown_document_reads_lossy_non_utf8_content() {
+    let root = create_test_dir("lossy-open");
+    let path = root.join("legacy.txt");
+    write_file_bytes(&path, &[0xFF, 0xFE, b'a', b'b']);
+
+    let opened = read_markdown_document(&path).expect("document should open with lossy decoding");
+
+    assert_eq!(opened.file_name, "legacy.txt");
+    assert!(opened.content.ends_with("ab"));
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn rename_markdown_file_allows_case_only_rename() {
+    let root = create_test_dir("case-file");
+    let path = root.join("Note.md");
+    write_file(&path, "note");
+
+    let renamed = rename_markdown_file(
+      path.to_string_lossy().into_owned(),
+      "note.md".to_string(),
+    )
+    .expect("case-only file rename should succeed");
+
+    assert_eq!(renamed.file_name, "note.md");
+    assert!(root.join("note.md").exists() || root.join("Note.md").exists());
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn rename_directory_allows_case_only_rename() {
+    let root = create_test_dir("case-dir");
+    let path = root.join("Docs");
+    fs::create_dir_all(&path).expect("directory should be created");
+
+    let renamed = rename_directory(
+      path.to_string_lossy().into_owned(),
+      "docs".to_string(),
+    )
+    .expect("case-only directory rename should succeed");
+
+    assert_eq!(renamed.name, "docs");
+    assert!(root.join("docs").exists() || root.join("Docs").exists());
 
     fs::remove_dir_all(root).expect("test directory should be removed");
   }
