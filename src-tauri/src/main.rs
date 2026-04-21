@@ -55,8 +55,6 @@ const IGNORED_TEXT_SCAN_DIRECTORIES: &[&str] = &[
   ".tauri",
 ];
 
-struct RecentFileMenuState(Mutex<Vec<String>>);
-
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MenuEnabledState {
@@ -129,6 +127,8 @@ struct RecentMenuEntry {
   file_name: String,
   file_path: String,
 }
+
+struct RecentFileMenuState(Mutex<Vec<RecentMenuEntry>>);
 
 #[derive(Clone, Copy)]
 struct TextFileScanLimits {
@@ -206,11 +206,11 @@ fn update_recent_files_menu(
 ) -> Result<(), String> {
   update_recent_file_menu_items(&app, &entries).map_err(|error| error.to_string())?;
 
-  let mut paths = state
+  let mut cached_entries = state
     .0
     .lock()
     .map_err(|_| "Failed to lock recent files menu state.".to_string())?;
-  *paths = entries.iter().map(|entry| entry.file_path.clone()).collect();
+  *cached_entries = entries;
   Ok(())
 }
 
@@ -1294,28 +1294,8 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 }
 
 fn emit_app_command<R: Runtime>(app: &AppHandle<R>, payload: AppCommandPayload) {
-  let target_label = app
-    .webview_windows()
-    .into_iter()
-    .find_map(|(label, window)| {
-      if window.is_focused().unwrap_or(false) {
-        Some(label)
-      } else {
-        None
-      }
-    })
-    .unwrap_or_else(|| "main".to_string());
-
-  if let Err(error) = app.emit_to(target_label.as_str(), APP_COMMAND_EVENT, payload.clone()) {
-    if target_label != "main" {
-      if let Err(fallback_error) = app.emit_to("main", APP_COMMAND_EVENT, payload) {
-        eprintln!(
-          "Failed to emit app command to focused window ({error}) and main webview ({fallback_error})."
-        );
-      }
-    } else {
-      eprintln!("Failed to emit app command to main webview: {error}");
-    }
+  if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, payload) {
+    eprintln!("Failed to emit app command to main webview: {error}");
   }
 }
 
@@ -1426,14 +1406,16 @@ fn main() {
           return;
         };
 
-        let Ok(paths) = state.0.lock() else {
+        let Ok(entries) = state.0.lock() else {
           return;
         };
 
-        if let Some(path) = paths.get(index) {
+        if let Some(entry) = entries.get(index) {
           emit_app_command(
             app,
-            AppCommandPayload::OpenRecentFile { path: path.clone() },
+            AppCommandPayload::OpenRecentFile {
+              path: entry.file_path.clone(),
+            },
           );
         }
       }

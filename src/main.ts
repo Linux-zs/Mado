@@ -523,6 +523,11 @@ let activeDocumentId: string | null = null;
 let documentSequence = 0;
 let documentListOrderSeed = 0;
 let recentFiles = loadRecentFiles();
+let recentFilesRevision = 0;
+let recentFilesMenuPendingRevision: number | null = null;
+let recentFilesMenuSyncInFlight = false;
+let recentFilesStorageErrorShown = false;
+let recentFilesMenuSyncErrorShown = false;
 let currentDirectoryPath = loadCurrentDirectoryPath();
 let directoryFiles: DirectoryFileEntry[] = [];
 let directoryFolders: DirectoryFolderEntry[] = [];
@@ -2598,11 +2603,37 @@ function loadRecentFiles(): RecentFileEntry[] {
   }
 }
 
+function createRecentMenuEntries(): RecentMenuEntry[] {
+  return recentFiles.slice(0, 10).map((entry) => ({
+    fileName: entry.fileName,
+    filePath: entry.filePath
+  }));
+}
+
+function reportRecentFilesStorageError(error: unknown): void {
+  console.error('Failed to persist recent files to localStorage.', error);
+
+  if (!recentFilesStorageErrorShown) {
+    recentFilesStorageErrorShown = true;
+    showHeaderNotice('最近文件列表无法写入本地存储。', true);
+  }
+}
+
+function reportRecentFilesMenuSyncError(error: unknown): void {
+  console.error('Failed to sync recent files menu.', error);
+
+  if (!recentFilesMenuSyncErrorShown) {
+    recentFilesMenuSyncErrorShown = true;
+    showHeaderNotice('最近文件菜单同步失败。', true);
+  }
+}
+
 function persistRecentFiles(): void {
   try {
     window.localStorage.setItem(RECENT_FILES_STORAGE_KEY, JSON.stringify(recentFiles));
-  } catch {
-    // Keep the in-memory list even if persistence fails.
+    recentFilesStorageErrorShown = false;
+  } catch (error) {
+    reportRecentFilesStorageError(error);
   }
 
   scheduleRecentFilesMenuSync();
@@ -2695,15 +2726,51 @@ function setStoredFileTreeExpansion(rootPath: string | null, relativePath: strin
   persistFileTreeExpansionState();
 }
 
-function syncRecentFilesMenu(): Promise<void> {
-  const entries: RecentMenuEntry[] = recentFiles.slice(0, 10).map((entry) => ({
-    fileName: entry.fileName,
-    filePath: entry.filePath
-  }));
+async function flushRecentFilesMenuSync(): Promise<void> {
+  if (recentFilesMenuSyncInFlight || recentFilesMenuPendingRevision === null) {
+    return;
+  }
 
-  return invoke<void>('update_recent_files_menu', { entries }).catch(() => {
-    // The sidebar remains usable even if the native menu cannot be rebuilt.
-  });
+  recentFilesMenuSyncInFlight = true;
+  const syncedRevision = recentFilesMenuPendingRevision;
+  recentFilesMenuPendingRevision = null;
+
+  try {
+    await invoke<void>('update_recent_files_menu', {
+      entries: createRecentMenuEntries()
+    });
+    recentFilesMenuSyncErrorShown = false;
+  } catch (error) {
+    reportRecentFilesMenuSyncError(error);
+    recentFilesMenuPendingRevision = recentFilesRevision;
+
+    if (recentFilesMenuSyncTimer === null) {
+      recentFilesMenuSyncTimer = window.setTimeout(() => {
+        recentFilesMenuSyncTimer = null;
+        void flushRecentFilesMenuSync();
+      }, 1000);
+    }
+  } finally {
+    recentFilesMenuSyncInFlight = false;
+
+    if (
+      recentFilesMenuPendingRevision !== null &&
+      recentFilesMenuPendingRevision !== syncedRevision &&
+      recentFilesMenuSyncTimer === null
+    ) {
+      scheduleRecentFilesMenuSync();
+    }
+  }
+}
+
+async function syncRecentFilesMenu(): Promise<void> {
+  if (recentFilesMenuSyncTimer !== null) {
+    window.clearTimeout(recentFilesMenuSyncTimer);
+    recentFilesMenuSyncTimer = null;
+  }
+
+  recentFilesMenuPendingRevision = recentFilesRevision;
+  await flushRecentFilesMenuSync();
 }
 
 function scheduleRecentFilesMenuSync(): void {
@@ -2711,9 +2778,10 @@ function scheduleRecentFilesMenuSync(): void {
     window.clearTimeout(recentFilesMenuSyncTimer);
   }
 
+  recentFilesMenuPendingRevision = recentFilesRevision;
   recentFilesMenuSyncTimer = window.setTimeout(() => {
     recentFilesMenuSyncTimer = null;
-    void syncRecentFilesMenu();
+    void flushRecentFilesMenuSync();
   }, 180);
 }
 
@@ -3370,9 +3438,10 @@ function formatListDate(timestamp: number): string {
 }
 
 function upsertRecentEntry(entry: RecentFileEntry): void {
-  recentFiles = [entry, ...recentFiles.filter((item) => item.filePath !== entry.filePath)].sort(
-    (left, right) => right.lastOpenedAt - left.lastOpenedAt
+  recentFiles = [entry, ...recentFiles.filter((item) => item.filePath !== entry.filePath)].sort((left, right) =>
+    right.lastOpenedAt - left.lastOpenedAt
   );
+  recentFilesRevision += 1;
   persistRecentFiles();
 }
 
@@ -3406,6 +3475,7 @@ function upsertRecentFromDocumentPayload(
 
 function removeRecentFile(filePath: string): void {
   recentFiles = recentFiles.filter((entry) => entry.filePath !== filePath);
+  recentFilesRevision += 1;
   persistRecentFiles();
 }
 
@@ -6308,6 +6378,7 @@ async function dispatchAppCommand(
     }
     case 'clearRecentFiles':
       recentFiles = [];
+      recentFilesRevision += 1;
       persistRecentFiles();
       return;
     case 'openRecentFile':
