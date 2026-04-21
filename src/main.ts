@@ -31,7 +31,7 @@ import {
   insertTableCommand,
   toggleStrikethroughCommand
 } from '@milkdown/preset-gfm';
-import { Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
+import { Plugin, PluginKey, Selection, TextSelection } from '@milkdown/prose/state';
 import {
   deleteColumn,
   deleteRow,
@@ -76,6 +76,7 @@ type DocumentState = {
   editorScrollLeft: number;
   editorSelectionFrom: number;
   editorSelectionTo: number;
+  editorSelectionJson: Record<string, unknown> | null;
   sourceSelectionStart: number;
   sourceSelectionEnd: number;
   sourceScrollTop: number;
@@ -1413,6 +1414,7 @@ function rememberMilkdownSelection(
 ): void {
   document.editorSelectionFrom = selection.from;
   document.editorSelectionTo = selection.to;
+  document.editorSelectionJson = selection.toJSON() as Record<string, unknown>;
 }
 
 function clampEditorSelectionPosition(docSize: number, position: number): number {
@@ -1427,8 +1429,9 @@ function restoreMilkdownSelection(view: EditorView, document: DocumentState): vo
   let nextSelection: EditorView['state']['selection'];
 
   try {
-    nextSelection =
-      from === to
+    nextSelection = document.editorSelectionJson
+      ? Selection.fromJSON(view.state.doc, document.editorSelectionJson)
+      : from === to
         ? TextSelection.near(view.state.doc.resolve(from))
         : TextSelection.create(view.state.doc, from, to);
   } catch {
@@ -1812,6 +1815,58 @@ function focusActiveCommandContext(): void {
     } catch {
       focusMilkdownSession(session);
     }
+  }
+}
+
+function isSelectionPositionWithinRange(
+  selection: EditorView['state']['selection'],
+  position: number
+): boolean {
+  return selection.ranges.some(
+    (range) => position >= range.$from.pos && position <= range.$to.pos
+  );
+}
+
+function updateRenderedContextMenuSelection(event: MouseEvent): void {
+  const session = getActiveMilkdownSession();
+
+  if (!session) {
+    return;
+  }
+
+  try {
+    session.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const position = view.posAtCoords({ left: event.clientX, top: event.clientY });
+
+      if (!position) {
+        return;
+      }
+
+      const { selection } = view.state;
+
+      if (!selection.empty && isSelectionPositionWithinRange(selection, position.pos)) {
+        return;
+      }
+
+      const nextSelection = TextSelection.near(view.state.doc.resolve(position.pos));
+
+      if (!nextSelection.eq(selection)) {
+        view.dispatch(view.state.tr.setSelection(nextSelection));
+      }
+    });
+  } catch {
+    // Keep the current selection when the click position cannot be resolved.
+  }
+}
+
+function updateSourceContextMenuSelection(): void {
+  const activeDocument = getActiveDocument();
+
+  sourceTextarea.focus();
+
+  if (activeDocument && editorViewMode === 'source') {
+    rememberSourceEditorContext(activeDocument);
   }
 }
 
@@ -7891,23 +7946,9 @@ function handleEditorContextMenu(event: MouseEvent): void {
   event.preventDefault();
 
   if (editorViewMode === 'rendered') {
-    const session = getActiveMilkdownSession();
-
-    if (session) {
-      try {
-        session.editor.action((ctx) => {
-          const view = ctx.get(editorViewCtx);
-          const position = view.posAtCoords({ left: event.clientX, top: event.clientY });
-
-          if (position && view.state.selection.empty) {
-            const selection = TextSelection.near(view.state.doc.resolve(position.pos));
-            view.dispatch(view.state.tr.setSelection(selection));
-          }
-        });
-      } catch {
-        // Keep the current selection when the click position cannot be resolved.
-      }
-    }
+    updateRenderedContextMenuSelection(event);
+  } else if (event.target === sourceTextarea || event.target instanceof Node) {
+    updateSourceContextMenuSelection();
   }
 
   openContextMenu(buildEditorContextMenuItemsFinal(), event.clientX, event.clientY);
@@ -9159,6 +9200,7 @@ function applyOpenedDocumentState(document: DocumentState, opened: OpenedDocumen
   document.editorScrollLeft = 0;
   document.editorSelectionFrom = 0;
   document.editorSelectionTo = 0;
+  document.editorSelectionJson = null;
   document.sourceSelectionStart = 0;
   document.sourceSelectionEnd = 0;
   document.sourceScrollTop = 0;
@@ -9185,6 +9227,7 @@ function createDocumentState(document: OpenedDocument): DocumentState {
     editorScrollLeft: 0,
     editorSelectionFrom: 0,
     editorSelectionTo: 0,
+    editorSelectionJson: null,
     sourceSelectionStart: 0,
     sourceSelectionEnd: 0,
     sourceScrollTop: 0
@@ -9356,6 +9399,7 @@ function createUntitledDocument(): void {
     editorScrollLeft: 0,
     editorSelectionFrom: 0,
     editorSelectionTo: 0,
+    editorSelectionJson: null,
     sourceSelectionStart: 0,
     sourceSelectionEnd: 0,
     sourceScrollTop: 0
