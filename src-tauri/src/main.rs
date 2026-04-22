@@ -12,8 +12,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{
   menu::{
-    Menu, MenuBuilder, MenuItem, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, Submenu,
-    SubmenuBuilder,
+    CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder,
+    MenuItemKind, PredefinedMenuItem, Submenu, SubmenuBuilder,
   },
   AppHandle, Emitter, Manager, Runtime, State,
 };
@@ -21,6 +21,8 @@ use tauri::{
 use tauri::webview::PlatformWebview;
 #[cfg(windows)]
 use windows_core::Interface;
+#[cfg(windows)]
+use winreg::{enums::HKEY_CURRENT_USER, enums::HKEY_LOCAL_MACHINE, RegKey, HKEY};
 
 const MENU_OPEN_FILE_ID: &str = "file-open";
 const MENU_OPEN_FOLDER_ID: &str = "file-open-folder";
@@ -35,6 +37,11 @@ const MENU_EDIT_FIND_ID: &str = "edit-find";
 const MENU_EDIT_REPLACE_ID: &str = "edit-replace";
 const MENU_CLEAR_RECENT_FILES_ID: &str = "file-clear-recent";
 const MENU_RECENT_FILE_PREFIX: &str = "file-recent-open:";
+const MENU_APPEARANCE_THEME_SYSTEM_ID: &str = "appearance-theme:system";
+const MENU_APPEARANCE_THEME_LIGHT_ID: &str = "appearance-theme:light";
+const MENU_APPEARANCE_THEME_DARK_ID: &str = "appearance-theme:dark";
+const MENU_APPEARANCE_FONT_PREFIX: &str = "appearance-font:";
+const APPEARANCE_FONT_SYSTEM_VALUE: &str = "system";
 const RECENT_FILES_MENU_LIMIT: usize = 10;
 const APP_COMMAND_EVENT: &str = "request-app-command";
 const EDITOR_COMMAND_MENU_PREFIX: &str = "editor-command:";
@@ -82,6 +89,28 @@ enum AppCommandPayload {
     #[serde(rename = "commandId")]
     command_id: String,
   },
+  SetAppearanceTheme {
+    theme: String,
+  },
+  SetAppearanceFont {
+    slot: String,
+    font: String,
+  },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AppearanceMenuFontsState {
+  cjk: String,
+  latin: String,
+  code: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AppearanceMenuState {
+  theme: String,
+  fonts: AppearanceMenuFontsState,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -238,6 +267,11 @@ fn update_menu_enabled_states(app: AppHandle, states: Vec<MenuEnabledState>) -> 
   }
 
   Ok(())
+}
+
+#[tauri::command]
+fn update_appearance_menu_state(app: AppHandle, state: AppearanceMenuState) -> Result<(), String> {
+  sync_appearance_menu_state(&app, &state).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1016,6 +1050,158 @@ fn editor_command_menu_item<R: Runtime>(
   )
 }
 
+fn check_menu_item<R: Runtime>(
+  app: &AppHandle<R>,
+  id: &str,
+  text: &str,
+  checked: bool,
+) -> tauri::Result<CheckMenuItem<R>> {
+  CheckMenuItemBuilder::with_id(id, text)
+    .checked(checked)
+    .build(app)
+}
+
+fn appearance_font_menu_item_id(slot: &str, font: &str) -> String {
+  format!("{MENU_APPEARANCE_FONT_PREFIX}{slot}:{}", urlencoding::encode(font))
+}
+
+fn appearance_font_selection_from_menu_id(menu_id: &str) -> Option<(String, String)> {
+  let payload = menu_id.strip_prefix(MENU_APPEARANCE_FONT_PREFIX)?;
+  let (slot, encoded_font) = payload.split_once(':')?;
+  let font = urlencoding::decode(encoded_font).ok()?.into_owned();
+
+  Some((slot.to_string(), font))
+}
+
+fn normalize_windows_font_menu_label(value_name: &str) -> Option<String> {
+  let trimmed = value_name.trim();
+
+  if trimmed.is_empty() || trimmed.starts_with('@') {
+    return None;
+  }
+
+  let normalized = trimmed
+    .strip_suffix(" (TrueType)")
+    .or_else(|| trimmed.strip_suffix(" (OpenType)"))
+    .or_else(|| trimmed.strip_suffix(" (All res)"))
+    .or_else(|| trimmed.strip_suffix(" (Variable TrueType)"))
+    .unwrap_or(trimmed)
+    .trim();
+
+  if normalized.is_empty() {
+    return None;
+  }
+
+  Some(normalized.to_string())
+}
+
+#[cfg(windows)]
+fn extend_installed_font_names_from_registry(root: HKEY, fonts: &mut Vec<String>) {
+  let hive = RegKey::predef(root);
+  let Ok(key) = hive.open_subkey("Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts") else {
+    return;
+  };
+
+  for value_name in key.enum_values().flatten().map(|entry| entry.0) {
+    if let Some(label) = normalize_windows_font_menu_label(&value_name) {
+      fonts.push(label);
+    }
+  }
+}
+
+#[cfg(not(windows))]
+fn extend_installed_font_names_from_registry(_root: usize, _fonts: &mut Vec<String>) {}
+
+fn list_installed_font_names() -> Vec<String> {
+  let mut fonts = Vec::new();
+
+  #[cfg(windows)]
+  {
+    extend_installed_font_names_from_registry(HKEY_LOCAL_MACHINE, &mut fonts);
+    extend_installed_font_names_from_registry(HKEY_CURRENT_USER, &mut fonts);
+  }
+
+  fonts.sort_by_key(|name| name.to_lowercase());
+  fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+  fonts
+}
+
+fn build_appearance_font_submenu<R: Runtime>(
+  app: &AppHandle<R>,
+  label: &str,
+  slot: &str,
+  fonts: &[String],
+) -> tauri::Result<Submenu<R>> {
+  let mut builder = SubmenuBuilder::new(app, label)
+    .item(&check_menu_item(
+      app,
+      &appearance_font_menu_item_id(slot, APPEARANCE_FONT_SYSTEM_VALUE),
+      "\u{7cfb}\u{7edf}\u{5b57}\u{4f53}",
+      true,
+    )?)
+    .separator();
+
+  for font in fonts {
+    builder = builder.item(&check_menu_item(
+      app,
+      &appearance_font_menu_item_id(slot, font),
+      font,
+      false,
+    )?);
+  }
+
+  builder.build()
+}
+
+fn build_appearance_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+  let fonts = list_installed_font_names();
+  let theme_menu = SubmenuBuilder::new(app, "\u{4e3b}\u{9898}")
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_SYSTEM_ID,
+      "\u{8ddf}\u{968f}\u{7cfb}\u{7edf}",
+      true,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_LIGHT_ID,
+      "\u{6d45}\u{8272}",
+      false,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_DARK_ID,
+      "\u{6df1}\u{8272}",
+      false,
+    )?)
+    .build()?;
+  let fonts_menu = SubmenuBuilder::new(app, "\u{5b57}\u{4f53}")
+    .item(&build_appearance_font_submenu(
+      app,
+      "\u{4e2d}\u{6587}\u{5b57}\u{4f53}",
+      "cjk",
+      &fonts,
+    )?)
+    .item(&build_appearance_font_submenu(
+      app,
+      "\u{82f1}\u{6587}\u{5b57}\u{4f53}",
+      "latin",
+      &fonts,
+    )?)
+    .item(&build_appearance_font_submenu(
+      app,
+      "\u{4ee3}\u{7801}\u{5b57}\u{4f53}",
+      "code",
+      &fonts,
+    )?)
+    .build()?;
+
+  SubmenuBuilder::new(app, "\u{5916}\u{89c2}(&A)")
+    .item(&theme_menu)
+    .item(&fonts_menu)
+    .build()
+}
+
 fn recent_file_menu_item_id(index: usize) -> String {
   format!("{MENU_RECENT_FILE_PREFIX}{index}")
 }
@@ -1043,6 +1229,128 @@ fn find_menu_item_by_id<R: Runtime>(
   }
 
   Ok(None)
+}
+
+fn find_check_menu_item_by_id<R: Runtime>(
+  items: Vec<MenuItemKind<R>>,
+  target_id: &str,
+) -> tauri::Result<Option<CheckMenuItem<R>>> {
+  for item in items {
+    match item {
+      MenuItemKind::Check(check_item) if check_item.id().as_ref() == target_id => {
+        return Ok(Some(check_item));
+      }
+      MenuItemKind::Submenu(submenu) => {
+        if let Some(found) = find_check_menu_item_by_id(submenu.items()?, target_id)? {
+          return Ok(Some(found));
+        }
+      }
+      _ => {}
+    }
+  }
+
+  Ok(None)
+}
+
+fn set_check_menu_item_checked<R: Runtime>(
+  menu_items: &[MenuItemKind<R>],
+  target_id: &str,
+  checked: bool,
+) -> tauri::Result<()> {
+  let Some(item) = find_check_menu_item_by_id(menu_items.to_vec(), target_id)? else {
+    return Ok(());
+  };
+
+  item.set_checked(checked)
+}
+
+fn sync_appearance_menu_state<R: Runtime>(
+  app: &AppHandle<R>,
+  state: &AppearanceMenuState,
+) -> tauri::Result<()> {
+  let Some(menu) = app.menu() else {
+    return Ok(());
+  };
+
+  let menu_items = menu.items()?;
+  let theme = match state.theme.as_str() {
+    "light" => MENU_APPEARANCE_THEME_LIGHT_ID,
+    "dark" => MENU_APPEARANCE_THEME_DARK_ID,
+    _ => MENU_APPEARANCE_THEME_SYSTEM_ID,
+  };
+
+  for (menu_id, is_checked) in [
+    (
+      MENU_APPEARANCE_THEME_SYSTEM_ID,
+      theme == MENU_APPEARANCE_THEME_SYSTEM_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_LIGHT_ID,
+      theme == MENU_APPEARANCE_THEME_LIGHT_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_DARK_ID,
+      theme == MENU_APPEARANCE_THEME_DARK_ID,
+    ),
+  ] {
+    set_check_menu_item_checked(&menu_items, menu_id, is_checked)?;
+  }
+
+  for (slot, font) in [
+    ("cjk", state.fonts.cjk.as_str()),
+    ("latin", state.fonts.latin.as_str()),
+    ("code", state.fonts.code.as_str()),
+  ] {
+    let target_id = appearance_font_menu_item_id(slot, font);
+    let fallback_id = appearance_font_menu_item_id(slot, APPEARANCE_FONT_SYSTEM_VALUE);
+    let has_target = find_check_menu_item_by_id(menu_items.clone(), &target_id)?.is_some();
+
+    set_check_menu_item_checked(
+      &menu_items,
+      if has_target { &target_id } else { &fallback_id },
+      true,
+    )?;
+
+    if has_target {
+      set_check_menu_item_checked(&menu_items, &fallback_id, false)?;
+    } else {
+      set_check_menu_item_checked(&menu_items, &fallback_id, true)?;
+    }
+
+    for item in menu_items.clone() {
+      sync_appearance_font_check_item(slot, &target_id, &fallback_id, item)?;
+    }
+  }
+
+  Ok(())
+}
+
+fn sync_appearance_font_check_item<R: Runtime>(
+  slot: &str,
+  target_id: &str,
+  fallback_id: &str,
+  item: MenuItemKind<R>,
+) -> tauri::Result<()> {
+  match item {
+    MenuItemKind::Submenu(submenu) => {
+      for child in submenu.items()? {
+        sync_appearance_font_check_item(slot, target_id, fallback_id, child)?;
+      }
+    }
+    MenuItemKind::Check(check_item) => {
+      let id = check_item.id().as_ref();
+      if id.starts_with(MENU_APPEARANCE_FONT_PREFIX)
+        && appearance_font_selection_from_menu_id(id)
+          .map(|(item_slot, _)| item_slot == slot)
+          .unwrap_or(false)
+      {
+        check_item.set_checked(id == target_id || (id == fallback_id && target_id == fallback_id))?;
+      }
+    }
+    _ => {}
+  }
+
+  Ok(())
 }
 
 fn update_recent_file_menu_items<R: Runtime>(
@@ -1349,7 +1657,7 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     )?)
     .build()?;
   let view_menu = SubmenuBuilder::new(app, "\u{89c6}\u{56fe}(&V)").build()?;
-  let theme_menu = SubmenuBuilder::new(app, "\u{4e3b}\u{9898}(&T)").build()?;
+  let appearance_menu = build_appearance_menu(app)?;
   let help_menu = SubmenuBuilder::new(app, "\u{5e2e}\u{52a9}(&H)").build()?;
 
   MenuBuilder::new(app)
@@ -1359,7 +1667,7 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
       &paragraph_menu,
       &format_menu,
       &view_menu,
-      &theme_menu,
+      &appearance_menu,
       &help_menu,
     ])
     .build()
@@ -1419,6 +1727,15 @@ fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
     MENU_EDIT_REPLACE_ID => Some(AppCommandPayload::EditCommand {
       command_id: "replace".to_string(),
     }),
+    MENU_APPEARANCE_THEME_SYSTEM_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "system".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_LIGHT_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "light".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_DARK_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "dark".to_string(),
+    }),
     MENU_CLEAR_RECENT_FILES_ID => Some(AppCommandPayload::ClearRecentFiles),
     _ => None,
   }
@@ -1442,7 +1759,8 @@ fn main() {
       validate_markdown_file_name,
       validate_markdown_save_path,
       update_recent_files_menu,
-      update_menu_enabled_states
+      update_menu_enabled_states,
+      update_appearance_menu_state
     ])
     .setup(|app| {
       let menu = build_app_menu(app.handle())?;
@@ -1465,6 +1783,11 @@ fn main() {
             command_id: command_id.to_string(),
           },
         );
+        return;
+      }
+
+      if let Some((slot, font)) = appearance_font_selection_from_menu_id(menu_id) {
+        emit_app_command(app, AppCommandPayload::SetAppearanceFont { slot, font });
         return;
       }
 
@@ -2048,6 +2371,35 @@ mod tests {
   }
 
   #[test]
+  fn app_command_payload_serializes_appearance_commands_in_camel_case() {
+    let theme_value = serde_json::to_value(AppCommandPayload::SetAppearanceTheme {
+      theme: "dark".to_string(),
+    })
+    .expect("theme payload should serialize");
+    let font_value = serde_json::to_value(AppCommandPayload::SetAppearanceFont {
+      slot: "code".to_string(),
+      font: "Consolas".to_string(),
+    })
+    .expect("font payload should serialize");
+
+    assert_eq!(
+      theme_value,
+      json!({
+        "type": "setAppearanceTheme",
+        "theme": "dark"
+      })
+    );
+    assert_eq!(
+      font_value,
+      json!({
+        "type": "setAppearanceFont",
+        "slot": "code",
+        "font": "Consolas"
+      })
+    );
+  }
+
+  #[test]
   fn app_command_for_menu_id_maps_file_and_edit_commands() {
     assert!(matches!(
       app_command_for_menu_id(MENU_SAVE_FILE_ID),
@@ -2068,7 +2420,36 @@ mod tests {
       app_command_for_menu_id(MENU_EDIT_REPLACE_ID),
       Some(AppCommandPayload::EditCommand { command_id }) if command_id == "replace"
     ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_THEME_SYSTEM_ID),
+      Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "system"
+    ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_THEME_DARK_ID),
+      Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "dark"
+    ));
 
     assert!(app_command_for_menu_id("missing-menu-id").is_none());
+  }
+
+  #[test]
+  fn appearance_font_menu_item_id_round_trips_slot_and_font() {
+    let menu_id = appearance_font_menu_item_id("latin", "Times New Roman");
+    let parsed =
+      appearance_font_selection_from_menu_id(&menu_id).expect("font menu id should round trip");
+
+    assert_eq!(parsed, ("latin".to_string(), "Times New Roman".to_string()));
+  }
+
+  #[test]
+  fn normalize_windows_font_menu_label_strips_font_backend_suffix() {
+    assert_eq!(
+      normalize_windows_font_menu_label("Arial (TrueType)").as_deref(),
+      Some("Arial")
+    );
+    assert_eq!(
+      normalize_windows_font_menu_label("@Malgun Gothic").as_deref(),
+      None
+    );
   }
 }

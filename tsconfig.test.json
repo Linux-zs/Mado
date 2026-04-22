@@ -19,6 +19,7 @@
     "src/save-flow-state.ts",
     "src/source-history-state.ts",
     "src/shortcut-guards.ts",
-    "src/table-overlay-state.ts"
+    "src/table-overlay-state.ts",
+    "src/appearance-state.ts"
   ]
 }

@@ -56,6 +56,15 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
 import {
+  createDefaultAppearanceSettings,
+  normalizeAppearanceSettings,
+  resolveAppearanceDisplayTheme,
+  resolveAppearanceFontStack,
+  type AppearanceFontSelection,
+  type AppearanceSettings,
+  type AppearanceTheme
+} from './appearance-state';
+import {
   DEFAULT_CODE_BLOCK_LANGUAGE_BADGE_TEXT,
   getCodeBlockLanguageBadgeText,
   normalizeCodeBlockLanguageInput
@@ -490,6 +499,7 @@ const RECENT_FILES_STORAGE_KEY = 'tias.recent-files.v1';
 const CURRENT_DIRECTORY_STORAGE_KEY = 'tias.current-directory.v1';
 const FILE_TREE_EXPANSION_STORAGE_KEY = 'tias.file-tree-expansion.v1';
 const FILES_SIDEBAR_SEARCH_VISIBLE_STORAGE_KEY = 'tias.files-sidebar-search-visible.v1';
+const APPEARANCE_SETTINGS_STORAGE_KEY = 'tias.appearance-settings.v1';
 const UNTITLED_FILE_NAME = '\u672a\u547d\u540d.md';
 const FILES_MODE = 'files';
 const OUTLINE_MODE = 'outline';
@@ -572,6 +582,8 @@ type AppCommandPayload =
   | { type: 'closeFile' }
   | { type: 'clearRecentFiles' }
   | { type: 'openRecentFile'; path: string }
+  | { type: 'setAppearanceTheme'; theme: AppearanceTheme }
+  | { type: 'setAppearanceFont'; slot: 'cjk' | 'latin' | 'code'; font: AppearanceFontSelection }
   | { type: 'editCommand'; commandId: EditCommandId }
   | { type: 'editorCommand'; commandId: string };
 type MilkdownCtxAccessor = {
@@ -622,6 +634,7 @@ let recentFilesMenuPendingRevision: number | null = null;
 let recentFilesMenuSyncInFlight = false;
 let recentFilesStorageErrorShown = false;
 let recentFilesMenuSyncErrorShown = false;
+let appearanceSettings = loadAppearanceSettings();
 let currentDirectoryPath = loadCurrentDirectoryPath();
 let directoryFiles: DirectoryFileEntry[] = [];
 let directoryFolders: DirectoryFolderEntry[] = [];
@@ -731,6 +744,7 @@ const SIDEBAR_VIEW_TRANSITION_MS = 170;
 const EDITOR_SURFACE_TRANSITION_MS = 180;
 const HEADING_TARGET_HIGHLIGHT_MS = 900;
 const EDITOR_SCROLL_REVEAL_OFFSET = 28;
+const colorSchemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 const reducedMotionMediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 const codeBlockHighlightParser = new DOMParser();
 const CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS: Record<string, HighlightLanguageLoader> = {
@@ -1082,8 +1096,16 @@ frame.append(sidebar, workspaceResizeHandle, editorPanel);
 shell.append(frame, contextMenuLayer, renameOverlay, deleteConfirmOverlay);
 app.replaceChildren(shell);
 
+applyAppearanceSettings();
 applySidebarWidth(sidebarWidth);
 applySidebarCollapsedState();
+syncAppearanceMenuState();
+
+colorSchemeMediaQuery.addEventListener('change', () => {
+  if (appearanceSettings.theme === 'system') {
+    applyAppearanceSettings();
+  }
+});
 renderFindReplaceBar();
 renderStatusBar();
 scheduleNativeMenuStateSync();
@@ -2634,6 +2656,92 @@ function finishWorkspaceResize(): void {
 
 function isDocumentUnsaved(document: DocumentState): boolean {
   return document.isUntitled || document.isDirty;
+}
+
+function loadAppearanceSettings(): AppearanceSettings {
+  try {
+    const stored = window.localStorage.getItem(APPEARANCE_SETTINGS_STORAGE_KEY);
+
+    if (!stored) {
+      return createDefaultAppearanceSettings();
+    }
+
+    return normalizeAppearanceSettings(JSON.parse(stored));
+  } catch {
+    return createDefaultAppearanceSettings();
+  }
+}
+
+function persistAppearanceSettings(): void {
+  try {
+    window.localStorage.setItem(APPEARANCE_SETTINGS_STORAGE_KEY, JSON.stringify(appearanceSettings));
+  } catch {
+    // Keep the in-memory appearance state even if persistence fails.
+  }
+}
+
+function syncAppearanceMenuState(): void {
+  void invoke('update_appearance_menu_state', {
+    state: appearanceSettings
+  }).catch(() => {
+    // The app can keep working even if native appearance menu sync fails.
+  });
+}
+
+function applyAppearanceSettings(): void {
+  const displayTheme = resolveAppearanceDisplayTheme(
+    appearanceSettings.theme,
+    colorSchemeMediaQuery.matches
+  );
+  const root = document.documentElement;
+  const uiFontStack = resolveAppearanceFontStack({
+    latin: appearanceSettings.fonts.latin,
+    cjk: appearanceSettings.fonts.cjk,
+    fallback: ['"Segoe UI"', '"Microsoft YaHei UI"', 'sans-serif']
+  });
+  const bodyFontStack = resolveAppearanceFontStack({
+    latin: appearanceSettings.fonts.latin,
+    cjk: appearanceSettings.fonts.cjk,
+    fallback: ['Georgia', '"Times New Roman"', '"Microsoft YaHei UI"', 'serif']
+  });
+  const codeFontStack = resolveAppearanceFontStack({
+    latin: appearanceSettings.fonts.code,
+    cjk: appearanceSettings.fonts.cjk,
+    fallback: ['Consolas', '"Cascadia Code"', '"Microsoft YaHei UI"', 'monospace']
+  });
+
+  root.dataset.theme = displayTheme;
+  root.style.colorScheme = displayTheme;
+  root.style.setProperty('--font-ui', uiFontStack);
+  root.style.setProperty('--font-body', bodyFontStack);
+  root.style.setProperty('--font-heading', bodyFontStack);
+  root.style.setProperty('--font-code', codeFontStack);
+}
+
+function setAppearanceTheme(theme: AppearanceTheme): void {
+  appearanceSettings = normalizeAppearanceSettings({
+    ...appearanceSettings,
+    theme
+  });
+  applyAppearanceSettings();
+  persistAppearanceSettings();
+  syncAppearanceMenuState();
+}
+
+function setAppearanceFont(
+  slot: keyof AppearanceSettings['fonts'],
+  font: AppearanceFontSelection
+): void {
+  appearanceSettings = normalizeAppearanceSettings({
+    ...appearanceSettings,
+    fonts: {
+      ...appearanceSettings.fonts,
+      [slot]: font
+    }
+  });
+  applyAppearanceSettings();
+  persistAppearanceSettings();
+  syncAppearanceMenuState();
 }
 
 function loadRecentFiles(): RecentFileEntry[] {
@@ -7098,6 +7206,14 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
       return true;
     case 'openRecentFile':
       return typeof candidate.path === 'string' && candidate.path.length > 0;
+    case 'setAppearanceTheme':
+      return candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark';
+    case 'setAppearanceFont':
+      return (
+        (candidate.slot === 'cjk' || candidate.slot === 'latin' || candidate.slot === 'code') &&
+        typeof candidate.font === 'string' &&
+        candidate.font.trim().length > 0
+      );
     case 'editCommand':
       return (
         (candidate.commandId === 'undo' ||
@@ -7299,6 +7415,12 @@ async function dispatchAppCommand(
       return;
     case 'openRecentFile':
       await openDocumentFromPath(command.path);
+      return;
+    case 'setAppearanceTheme':
+      setAppearanceTheme(command.theme);
+      return;
+    case 'setAppearanceFont':
+      setAppearanceFont(command.slot, command.font);
       return;
     case 'editCommand':
       executeEditCommand(command.commandId);
