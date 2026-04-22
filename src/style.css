@@ -881,7 +881,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   min-height: 100%;
   outline: none;
   word-break: break-word;
-  font: 15px/1.78 var(--font-body);
+  font: 16px/1.78 var(--font-body);
 }
 
 .milkdown-host .ProseMirror > *:first-child {
@@ -1585,7 +1585,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font: 15px/1.76 var(--font-body);
+  font: 16px/1.76 var(--font-body);
   color: var(--color-editor-paragraph);
 }
 
