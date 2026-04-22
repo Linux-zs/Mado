@@ -82,6 +82,7 @@ import {
   resolveSaveFlowDecision
 } from './save-flow-state';
 import {
+  isTablePropertiesInteractionRole,
   TABLE_ALIGNMENT_BUTTON_LABELS,
   TABLE_PROPERTIES_ALIGNMENT_LABEL,
   TABLE_PROPERTIES_APPLY_LABEL,
@@ -5819,6 +5820,20 @@ function updateTablePropertiesDraft(nextDraft: { rows?: number; cols?: number })
   }
 }
 
+function attachTablePropertiesPointerGuard(
+  element: HTMLElement,
+  role: 'panel' | 'grid-cell' | 'number-input' | 'apply-button' | 'align-button',
+  options?: { preventDefault?: boolean }
+): void {
+  element.dataset.tablePropertiesRole = role;
+  element.addEventListener('pointerdown', (event) => {
+    if (options?.preventDefault) {
+      event.preventDefault();
+    }
+    event.stopPropagation();
+  });
+}
+
 function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null {
   if (!tableToolProperties) {
     return null;
@@ -5842,6 +5857,7 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'table-size-grid-cell';
+      attachTablePropertiesPointerGuard(cell, 'grid-cell', { preventDefault: true });
       cell.setAttribute('aria-label', `${row} x ${col}`);
       cell.addEventListener('click', () => {
         updateTablePropertiesDraft({ rows: row, cols: col });
@@ -5858,6 +5874,7 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
   rowsInput.className = 'table-properties-number';
   rowsInput.type = 'number';
   rowsInput.min = '2';
+  attachTablePropertiesPointerGuard(rowsInput, 'number-input');
   rowsInput.addEventListener('change', () => {
     updateTablePropertiesDraft({ rows: Number(rowsInput.value || 2) });
   });
@@ -5870,6 +5887,7 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
   colsInput.className = 'table-properties-number';
   colsInput.type = 'number';
   colsInput.min = '1';
+  attachTablePropertiesPointerGuard(colsInput, 'number-input');
   colsInput.addEventListener('change', () => {
     updateTablePropertiesDraft({ cols: Number(colsInput.value || 1) });
   });
@@ -5877,6 +5895,7 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
   const applyButton = document.createElement('button');
   applyButton.type = 'button';
   applyButton.className = 'table-properties-apply';
+  attachTablePropertiesPointerGuard(applyButton, 'apply-button', { preventDefault: true });
   applyButton.addEventListener('click', () => {
     const nextRowsValue = rowsInput.value || String(tablePropertiesDraft?.rows ?? activeTableToolState?.rowCount ?? 2);
     const nextColsValue = colsInput.value || String(tablePropertiesDraft?.cols ?? activeTableToolState?.colCount ?? 1);
@@ -5901,6 +5920,7 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'table-align-button';
+    attachTablePropertiesPointerGuard(button, 'align-button', { preventDefault: true });
     button.textContent = TABLE_ALIGNMENT_BUTTON_LABELS[alignment];
     button.setAttribute('aria-label', TABLE_ALIGNMENT_BUTTON_LABELS[alignment]);
     button.addEventListener('click', () => {
@@ -6023,6 +6043,14 @@ function closeTableToolProperties(): void {
 function handleTableToolWindowPointerDown(event: PointerEvent): void {
   if ((!tableToolMenuOpen && !tableToolPropertiesOpen) || !tableToolOverlay) {
     return;
+  }
+
+  if (event.target instanceof Element) {
+    const role = event.target.closest<HTMLElement>('[data-table-properties-role]')?.dataset.tablePropertiesRole ?? null;
+
+    if (isTablePropertiesInteractionRole(role)) {
+      return;
+    }
   }
 
   if (event.target instanceof Node && tableToolOverlay.contains(event.target)) {
@@ -7334,7 +7362,7 @@ function createTableToolOverlay(
 
   const propertiesButton = document.createElement('button');
   propertiesButton.type = 'button';
-  propertiesButton.className = 'table-tool-button';
+  propertiesButton.className = 'table-tool-button table-tool-button-properties';
   propertiesButton.textContent = TABLE_PROPERTIES_BUTTON_LABEL;
   propertiesButton.setAttribute('aria-label', TABLE_PROPERTIES_BUTTON_LABEL);
   propertiesButton.setAttribute('aria-expanded', 'false');
@@ -7360,9 +7388,7 @@ function createTableToolOverlay(
 
   const properties = document.createElement('div');
   properties.className = 'table-properties-panel is-hidden';
-  properties.addEventListener('pointerdown', (event) => {
-    event.stopPropagation();
-  });
+  attachTablePropertiesPointerGuard(properties, 'panel');
 
   buttons.append(menuButton, propertiesButton);
   overlay.append(buttons, menu, properties);

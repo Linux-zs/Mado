@@ -1,14 +1,22 @@
 export type TableColumnAlignment = 'left' | 'center' | 'right';
 
-export const TABLE_PROPERTIES_BUTTON_LABEL = '表格属性';
-export const TABLE_PROPERTIES_SIZE_LABEL = '表格大小';
-export const TABLE_PROPERTIES_APPLY_LABEL = '应用';
-export const TABLE_PROPERTIES_ALIGNMENT_LABEL = '对齐方式';
+export const TABLE_PROPERTIES_BUTTON_LABEL = '\u8868\u683c\u5c5e\u6027';
+export const TABLE_PROPERTIES_SIZE_LABEL = '\u8868\u683c\u5927\u5c0f';
+export const TABLE_PROPERTIES_APPLY_LABEL = '\u5e94\u7528';
+export const TABLE_PROPERTIES_ALIGNMENT_LABEL = '\u5bf9\u9f50\u65b9\u5f0f';
 export const TABLE_ALIGNMENT_BUTTON_LABELS: Record<TableColumnAlignment, string> = {
-  left: '左对齐',
-  center: '居中',
-  right: '右对齐'
+  left: '\u5de6\u5bf9\u9f50',
+  center: '\u5c45\u4e2d',
+  right: '\u53f3\u5bf9\u9f50'
 };
+
+const TABLE_PROPERTIES_INTERACTION_ROLES = new Set([
+  'panel',
+  'grid-cell',
+  'number-input',
+  'apply-button',
+  'align-button'
+]);
 
 export type TableResizePlan = {
   nextRows: number;
@@ -28,6 +36,14 @@ export function normalizeTableColumnAlignment(value: unknown): TableColumnAlignm
   }
 
   return null;
+}
+
+export function isTablePropertiesInteractionRole(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return TABLE_PROPERTIES_INTERACTION_ROLES.has(value);
 }
 
 export function resolveTableResizePlan(input: {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  isTablePropertiesInteractionRole,
   TABLE_ALIGNMENT_BUTTON_LABELS,
   TABLE_PROPERTIES_ALIGNMENT_LABEL,
   TABLE_PROPERTIES_APPLY_LABEL,
@@ -135,4 +136,14 @@ test('table property labels stay in Chinese', () => {
     center: '\u5c45\u4e2d',
     right: '\u53f3\u5bf9\u9f50'
   });
+});
+
+test('table property interaction roles keep pointer events inside the overlay', () => {
+  assert.equal(isTablePropertiesInteractionRole('panel'), true);
+  assert.equal(isTablePropertiesInteractionRole('grid-cell'), true);
+  assert.equal(isTablePropertiesInteractionRole('number-input'), true);
+  assert.equal(isTablePropertiesInteractionRole('apply-button'), true);
+  assert.equal(isTablePropertiesInteractionRole('align-button'), true);
+  assert.equal(isTablePropertiesInteractionRole('caption'), false);
+  assert.equal(isTablePropertiesInteractionRole(null), false);
 });

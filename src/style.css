@@ -1245,26 +1245,32 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .table-tool-button {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 9px;
   border: 1px solid rgba(154, 115, 69, 0.16);
   border-radius: 8px;
   background: rgba(255, 252, 245, 0.98);
   color: rgba(60, 49, 35, 0.82);
   box-shadow: 0 10px 24px rgba(35, 27, 18, 0.1);
   font:
-    600 11px/1 'Consolas',
+    600 12px/1.1 'Consolas',
     'Cascadia Code',
     'Microsoft YaHei UI',
     monospace;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.table-tool-button-properties {
+  min-width: 68px;
+  padding-inline: 12px;
 }
 
 .table-tool-menu,
 .table-properties-panel {
-  min-width: 196px;
-  padding: 8px;
+  min-width: 264px;
+  padding: 12px;
   border: 1px solid rgba(60, 49, 35, 0.09);
   border-radius: 12px;
   background: rgba(255, 251, 244, 0.98);
@@ -1310,26 +1316,26 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .table-properties-caption {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   color: rgba(60, 49, 35, 0.46);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 .table-size-grid {
   display: grid;
-  grid-template-columns: repeat(8, 14px);
-  gap: 4px;
-  margin-bottom: 12px;
+  grid-template-columns: repeat(8, 18px);
+  gap: 5px;
+  margin-bottom: 14px;
 }
 
 .table-size-grid-cell {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 1px solid rgba(154, 115, 69, 0.16);
+  border-radius: 3px;
   background: rgba(255, 252, 245, 0.96);
   cursor: pointer;
 }
@@ -1340,34 +1346,57 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .table-properties-size-controls,
 .table-properties-align-buttons {
-  display: flex;
+  display: grid;
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
 }
 
+.table-properties-size-controls {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+}
+
+.table-properties-align-buttons {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
 .table-properties-number {
-  width: 52px;
-  height: 28px;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
   padding: 0 8px;
   border: 1px solid rgba(154, 115, 69, 0.16);
+  border-radius: 8px;
   background: rgba(255, 252, 245, 0.96);
   color: rgba(60, 49, 35, 0.82);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
 }
 
 .table-properties-size-separator {
   color: rgba(60, 49, 35, 0.62);
+  font-size: 18px;
+  line-height: 1;
 }
 
 .table-properties-apply,
 .table-align-button {
-  height: 28px;
-  padding: 0 10px;
+  min-height: 34px;
+  padding: 7px 10px;
   border: 1px solid rgba(154, 115, 69, 0.16);
   border-radius: 8px;
   background: rgba(255, 252, 245, 0.98);
   color: rgba(60, 49, 35, 0.82);
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.table-properties-apply {
+  min-width: 64px;
 }
 
 .table-align-button.is-active {
