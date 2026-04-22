@@ -57,6 +57,7 @@ import {
   type DeleteConfirmDialogResult,
   type DeleteConfirmRestoreTarget
 } from './delete-confirm-focus-state';
+import { resolveDirectoryRefreshCommit } from './directory-refresh-state';
 import {
   computeFindMatchActiveIndex,
   getFindMatchStart
@@ -4566,6 +4567,7 @@ async function refreshCurrentDirectoryFiles(
   options: DirectoryRefreshOptions = {}
 ): Promise<boolean> {
   const refreshToken = beginDirectoryRefresh();
+  const previousCurrentDirectoryPath = currentDirectoryPath;
 
   if (options.activationToken !== undefined && !isCurrentMilkdownActivation(options.activationToken)) {
     return false;
@@ -4575,8 +4577,17 @@ async function refreshCurrentDirectoryFiles(
   const loadToken = directoryFilesLoadToken;
 
   if (!nextDirectoryPath) {
-    currentDirectoryPath = null;
-    persistCurrentDirectoryPath();
+    const commit = resolveDirectoryRefreshCommit({
+      previousCurrentDirectoryPath,
+      nextDirectoryPath,
+      outcome: 'clear'
+    });
+    currentDirectoryPath = commit.nextCurrentDirectoryPath;
+
+    if (commit.shouldPersistCurrentDirectoryPath) {
+      persistCurrentDirectoryPath();
+    }
+
     directoryFiles = [];
     directoryFolders = [];
     directoryFilesLoading = false;
@@ -4604,8 +4615,17 @@ async function refreshCurrentDirectoryFiles(
       return false;
     }
 
-    currentDirectoryPath = nextDirectoryPath;
-    persistCurrentDirectoryPath();
+    const commit = resolveDirectoryRefreshCommit({
+      previousCurrentDirectoryPath,
+      nextDirectoryPath,
+      outcome: 'success'
+    });
+    currentDirectoryPath = commit.nextCurrentDirectoryPath;
+
+    if (commit.shouldPersistCurrentDirectoryPath) {
+      persistCurrentDirectoryPath();
+    }
+
     directoryFiles = result.files;
     directoryFolders = result.directories;
     directoryFilesError = null;
@@ -4622,8 +4642,17 @@ async function refreshCurrentDirectoryFiles(
       return false;
     }
 
-    currentDirectoryPath = nextDirectoryPath;
-    persistCurrentDirectoryPath();
+    const commit = resolveDirectoryRefreshCommit({
+      previousCurrentDirectoryPath,
+      nextDirectoryPath,
+      outcome: 'failure'
+    });
+    currentDirectoryPath = commit.nextCurrentDirectoryPath;
+
+    if (commit.shouldPersistCurrentDirectoryPath) {
+      persistCurrentDirectoryPath();
+    }
+
     directoryFiles = [];
     directoryFolders = [];
     directoryFilesError = '\u8bfb\u53d6\u5f53\u524d\u76ee\u5f55\u5931\u8d25\u3002';
