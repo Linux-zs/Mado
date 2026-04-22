@@ -8191,14 +8191,10 @@ async function handleRenameRequest(): Promise<void> {
     try {
       const saved = await saveDocumentToPath(activeDocument, savePath);
       applySavedDocumentState(activeDocument, saved);
-      if (!syncCurrentDirectoryFileEntry(saved)) {
-        await setCurrentDirectoryPath(saved.directoryPath);
-      } else {
-        requestFilesSidebarRefresh();
-      }
+      await syncSidebarAfterSavedDocument(saved, { ensureCurrentDirectory: true });
       requestRender({ editor: true });
-    } catch {
-      showHeaderNotice('\u547d\u540d\u5e76\u4fdd\u5b58\u5931\u8d25\u3002', true);
+    } catch (error) {
+      showHeaderNotice(getErrorMessage(error, '\u547d\u540d\u5e76\u4fdd\u5b58\u5931\u8d25\u3002'), true);
     }
 
     return;
@@ -8215,14 +8211,10 @@ async function handleRenameRequest(): Promise<void> {
       newName: renameResult
     });
     applyRenamedDocumentState(activeDocument, renamed);
-    if (syncCurrentDirectoryFileEntry(renamed, previousPath)) {
-      requestFilesSidebarRefresh();
-    } else {
-      await setCurrentDirectoryPath(renamed.directoryPath);
-    }
+    await syncSidebarAfterSavedDocument(renamed, { previousFilePath: previousPath, ensureCurrentDirectory: true });
     renderDocumentHeader();
-  } catch {
-    showHeaderNotice('\u91cd\u547d\u540d\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u6587\u4ef6\u540d\u662f\u5426\u5df2\u5b58\u5728\u3002', true);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '\u91cd\u547d\u540d\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u6587\u4ef6\u540d\u662f\u5426\u5df2\u5b58\u5728\u3002'), true);
   }
 }
 
