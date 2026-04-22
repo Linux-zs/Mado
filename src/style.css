@@ -1521,17 +1521,53 @@ body.is-resizing-layout .workspace-resize-handle::after,
 .milkdown-host .ProseMirror th,
 .milkdown-host .ProseMirror td {
   min-width: 80px;
-  padding: 12px 14px;
+  padding: 8px 12px;
   border-right: 1px solid rgba(60, 49, 35, 0.1);
   border-bottom: 1px solid rgba(60, 49, 35, 0.1);
   text-align: left;
   vertical-align: top;
+  line-height: 1.5;
 }
 
 .milkdown-host .ProseMirror th {
   background: rgba(154, 115, 69, 0.09);
   color: #27231d;
   font-weight: 700;
+}
+
+.milkdown-host .ProseMirror th > *:first-child,
+.milkdown-host .ProseMirror td > *:first-child {
+  margin-top: 0;
+}
+
+.milkdown-host .ProseMirror th > *:last-child,
+.milkdown-host .ProseMirror td > *:last-child {
+  margin-bottom: 0;
+}
+
+.milkdown-host .ProseMirror th p,
+.milkdown-host .ProseMirror td p {
+  margin: 0;
+}
+
+.milkdown-host .ProseMirror th ul,
+.milkdown-host .ProseMirror td ul,
+.milkdown-host .ProseMirror th ol,
+.milkdown-host .ProseMirror td ol {
+  margin: 6px 0 0 1.25em;
+  padding: 0;
+}
+
+.milkdown-host .ProseMirror th li + li,
+.milkdown-host .ProseMirror td li + li {
+  margin-top: 4px;
+}
+
+.milkdown-host .ProseMirror th blockquote,
+.milkdown-host .ProseMirror td blockquote,
+.milkdown-host .ProseMirror th pre,
+.milkdown-host .ProseMirror td pre {
+  margin: 8px 0;
 }
 
 .milkdown-host .ProseMirror tr:last-child td {
