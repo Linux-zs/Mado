@@ -61,7 +61,10 @@ type OpenedDocument = {
   filePath: string;
   directoryPath: string;
   content: string;
+  encoding: DocumentEncoding;
 };
+
+type DocumentEncoding = 'utf8' | 'utf8Bom' | 'utf16Le' | 'utf16Be' | 'lossy8Bit';
 
 type DocumentState = {
   id: string;
@@ -70,6 +73,7 @@ type DocumentState = {
   directoryPath: string | null;
   content: string;
   savedContent: string;
+  encoding: DocumentEncoding;
   sourceSnapshot: MarkdownSourceSnapshot;
   headingStyles: HeadingStyleState[];
   isDirty: boolean;
@@ -7840,7 +7844,8 @@ function showDeleteConfirmDialog(options: DeleteConfirmDialogOptions): Promise<b
 async function saveDocumentToPath(document: DocumentState, filePath: string): Promise<OpenedDocument> {
   return invoke<OpenedDocument>('save_markdown_file', {
     path: filePath,
-    content: document.content
+    content: document.content,
+    encoding: document.encoding
   });
 }
 
@@ -7850,6 +7855,7 @@ function applySavedDocumentState(document: DocumentState, saved: OpenedDocument)
   document.fileName = saved.fileName;
   document.filePath = saved.filePath;
   document.directoryPath = saved.directoryPath;
+  document.encoding = saved.encoding;
   document.savedContent = document.content;
   document.sourceSnapshot = createMarkdownSourceSnapshot(document.content);
   document.isDirty = false;
@@ -7871,6 +7877,7 @@ function applyRenamedDocumentState(document: DocumentState, renamed: OpenedDocum
   document.fileName = renamed.fileName;
   document.filePath = renamed.filePath;
   document.directoryPath = renamed.directoryPath;
+  document.encoding = renamed.encoding;
   document.lastViewedAt = Date.now();
 
   if (!wasDirty) {
@@ -8525,6 +8532,7 @@ function createUntitledDocument(): void {
     directoryPath: null,
     content: '',
     savedContent: '',
+    encoding: 'utf8',
     sourceSnapshot: createMarkdownSourceSnapshot(''),
     headingStyles: [],
     isDirty: true,
@@ -8635,6 +8643,7 @@ function applyOpenedDocumentState(document: DocumentState, opened: OpenedDocumen
   document.directoryPath = opened.directoryPath;
   document.content = opened.content;
   document.savedContent = opened.content;
+  document.encoding = opened.encoding;
   document.sourceSnapshot = createMarkdownSourceSnapshot(opened.content);
   document.headingStyles = [];
   document.isDirty = false;
@@ -8666,6 +8675,7 @@ function createDocumentState(document: OpenedDocument): DocumentState {
     directoryPath: document.directoryPath,
     content: document.content,
     savedContent: document.content,
+    encoding: document.encoding,
     sourceSnapshot: createMarkdownSourceSnapshot(document.content),
     headingStyles: [],
     isDirty: false,

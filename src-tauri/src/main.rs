@@ -84,13 +84,24 @@ enum AppCommandPayload {
   },
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DocumentEncoding {
+  Utf8,
+  Utf8Bom,
+  Utf16Le,
+  Utf16Be,
+  Lossy8Bit,
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenedDocument {
   file_name: String,
   file_path: String,
   directory_path: String,
   content: String,
+  encoding: DocumentEncoding,
 }
 
 #[derive(Clone, Serialize)]
@@ -119,6 +130,11 @@ struct TextFileListResult {
   files: Vec<TextFileEntry>,
   directories: Vec<DirectoryEntry>,
   is_truncated: bool,
+}
+
+struct DecodedTextDocument {
+  content: String,
+  encoding: DocumentEncoding,
 }
 
 #[derive(Clone, Deserialize)]
@@ -248,10 +264,15 @@ fn validate_markdown_save_path(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn save_markdown_file(path: String, content: String) -> Result<OpenedDocument, String> {
+fn save_markdown_file(
+  path: String,
+  content: String,
+  encoding: DocumentEncoding,
+) -> Result<OpenedDocument, String> {
   let normalized_path = normalize_markdown_save_path(&path)?;
   let file_path = Path::new(&normalized_path);
-  fs::write(file_path, content).map_err(|error| format!("Failed to save file: {error}"))?;
+  let encoded = encode_text_content(&content, encoding)?;
+  fs::write(file_path, encoded).map_err(|error| format!("Failed to save file: {error}"))?;
   read_markdown_document(file_path)
 }
 
@@ -295,7 +316,7 @@ fn create_markdown_file_in_directory(
     return Err("The target file already exists.".to_string());
   }
 
-  fs::write(&file_path, "").map_err(|error| format!("Failed to create file: {error}"))?;
+  fs::write(&file_path, b"").map_err(|error| format!("Failed to create file: {error}"))?;
   read_markdown_document(&file_path)
 }
 
@@ -327,6 +348,14 @@ fn duplicate_fs_entry(path: String) -> Result<PathEntryPayload, String> {
 
   if !source_path.exists() {
     return Err("The selected path does not exist.".to_string());
+  }
+
+  if fs::symlink_metadata(source_path)
+    .map_err(|error| format!("Failed to read path metadata: {error}"))?
+    .file_type()
+    .is_symlink()
+  {
+    return Err("Cannot duplicate symbolic links or reparse points.".to_string());
   }
 
   let target_path = next_available_duplicate_path(source_path)?;
@@ -463,7 +492,7 @@ fn get_path_properties(path: String) -> Result<PathPropertiesPayload, String> {
 }
 
 fn read_markdown_document(file_path: &Path) -> Result<OpenedDocument, String> {
-  let content = read_text_file_lossy(file_path)?;
+  let decoded = read_text_file(file_path)?;
 
   let file_name = file_path
     .file_name()
@@ -481,8 +510,53 @@ fn read_markdown_document(file_path: &Path) -> Result<OpenedDocument, String> {
     file_name,
     file_path: file_path.to_string_lossy().to_string(),
     directory_path,
-    content,
+    content: decoded.content,
+    encoding: decoded.encoding,
   })
+}
+
+fn decode_utf16_bytes(bytes: &[u8], little_endian: bool) -> String {
+  let mut units = Vec::with_capacity(bytes.len() / 2);
+  let mut chunks = bytes.chunks_exact(2);
+
+  for chunk in &mut chunks {
+    let unit = if little_endian {
+      u16::from_le_bytes([chunk[0], chunk[1]])
+    } else {
+      u16::from_be_bytes([chunk[0], chunk[1]])
+    };
+    units.push(unit);
+  }
+
+  String::from_utf16_lossy(&units)
+}
+
+fn encode_text_content(content: &str, encoding: DocumentEncoding) -> Result<Vec<u8>, String> {
+  match encoding {
+    DocumentEncoding::Utf8 => Ok(content.as_bytes().to_vec()),
+    DocumentEncoding::Utf8Bom => {
+      let mut bytes = vec![0xEF, 0xBB, 0xBF];
+      bytes.extend_from_slice(content.as_bytes());
+      Ok(bytes)
+    }
+    DocumentEncoding::Utf16Le => {
+      let mut bytes = vec![0xFF, 0xFE];
+      for unit in content.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+      }
+      Ok(bytes)
+    }
+    DocumentEncoding::Utf16Be => {
+      let mut bytes = vec![0xFE, 0xFF];
+      for unit in content.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_be_bytes());
+      }
+      Ok(bytes)
+    }
+    DocumentEncoding::Lossy8Bit => Err(
+      "This file uses an unknown legacy encoding and cannot be safely saved.".to_string(),
+    ),
+  }
 }
 
 fn build_path_entry_payload(path: &Path) -> Result<PathEntryPayload, String> {
@@ -559,17 +633,31 @@ fn next_available_duplicate_path(path: &Path) -> Result<PathBuf, String> {
 fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
   fs::create_dir(target).map_err(|error| format!("Failed to create duplicate folder: {error}"))?;
 
+  if let Err(error) = copy_directory_recursive_inner(source, target) {
+    let _ = fs::remove_dir_all(target);
+    return Err(error);
+  }
+
+  Ok(())
+}
+
+fn copy_directory_recursive_inner(source: &Path, target: &Path) -> Result<(), String> {
   for entry in fs::read_dir(source).map_err(|error| format!("Failed to read directory: {error}"))? {
     let entry = entry.map_err(|error| format!("Failed to read directory entry: {error}"))?;
     let source_path = entry.path();
     let target_path = target.join(entry.file_name());
-
-    if entry
+    let file_type = entry
       .file_type()
-      .map_err(|error| format!("Failed to read entry type: {error}"))?
-      .is_dir()
-    {
-      copy_directory_recursive(&source_path, &target_path)?;
+      .map_err(|error| format!("Failed to read entry type: {error}"))?;
+
+    if file_type.is_symlink() {
+      return Err("Cannot duplicate directories containing symbolic links or reparse points.".to_string());
+    }
+
+    if file_type.is_dir() {
+      fs::create_dir(&target_path)
+        .map_err(|error| format!("Failed to create duplicate folder: {error}"))?;
+      copy_directory_recursive_inner(&source_path, &target_path)?;
     } else {
       fs::copy(&source_path, &target_path)
         .map_err(|error| format!("Failed to duplicate file: {error}"))?;
@@ -723,11 +811,45 @@ fn build_directory_entry(root: &Path, directory_path: &Path) -> Option<Directory
   })
 }
 
-fn decode_text_bytes(bytes: &[u8]) -> String {
-  String::from_utf8_lossy(bytes).into_owned()
+fn decode_text_bytes(bytes: &[u8]) -> DecodedTextDocument {
+  const UTF8_BOM: &[u8; 3] = &[0xEF, 0xBB, 0xBF];
+  const UTF16_LE_BOM: &[u8; 2] = &[0xFF, 0xFE];
+  const UTF16_BE_BOM: &[u8; 2] = &[0xFE, 0xFF];
+
+  if let Some(content) = bytes.strip_prefix(UTF8_BOM) {
+    return DecodedTextDocument {
+      content: String::from_utf8_lossy(content).into_owned(),
+      encoding: DocumentEncoding::Utf8Bom,
+    };
+  }
+
+  if let Some(content) = bytes.strip_prefix(UTF16_LE_BOM) {
+    return DecodedTextDocument {
+      content: decode_utf16_bytes(content, true),
+      encoding: DocumentEncoding::Utf16Le,
+    };
+  }
+
+  if let Some(content) = bytes.strip_prefix(UTF16_BE_BOM) {
+    return DecodedTextDocument {
+      content: decode_utf16_bytes(content, false),
+      encoding: DocumentEncoding::Utf16Be,
+    };
+  }
+
+  match String::from_utf8(bytes.to_vec()) {
+    Ok(content) => DecodedTextDocument {
+      content,
+      encoding: DocumentEncoding::Utf8,
+    },
+    Err(_) => DecodedTextDocument {
+      content: String::from_utf8_lossy(bytes).into_owned(),
+      encoding: DocumentEncoding::Lossy8Bit,
+    },
+  }
 }
 
-fn read_text_file_lossy(file_path: &Path) -> Result<String, String> {
+fn read_text_file(file_path: &Path) -> Result<DecodedTextDocument, String> {
   let bytes = fs::read(file_path).map_err(|error| format!("Failed to read file: {error}"))?;
   Ok(decode_text_bytes(&bytes))
 }
@@ -738,7 +860,7 @@ fn read_limited_text(file_path: &Path, byte_limit: usize) -> std::io::Result<Str
   let mut buffer = Vec::new();
   reader.read_to_end(&mut buffer)?;
 
-  Ok(decode_text_bytes(&buffer))
+  Ok(decode_text_bytes(&buffer).content)
 }
 
 fn should_skip_text_scan_directory(path: &Path) -> bool {
@@ -1459,6 +1581,22 @@ mod tests {
     fs::write(path, content).expect("test file bytes should be written");
   }
 
+  fn write_utf16_le_with_bom(path: &Path, content: &str) {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in content.encode_utf16() {
+      bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    write_file_bytes(path, &bytes);
+  }
+
+  fn write_utf16_be_with_bom(path: &Path, content: &str) {
+    let mut bytes = vec![0xFE, 0xFF];
+    for unit in content.encode_utf16() {
+      bytes.extend_from_slice(&unit.to_be_bytes());
+    }
+    write_file_bytes(path, &bytes);
+  }
+
   #[test]
   fn list_text_files_marks_result_truncated_at_file_limit() {
     let root = create_test_dir("limit");
@@ -1646,12 +1784,139 @@ mod tests {
   fn read_markdown_document_reads_lossy_non_utf8_content() {
     let root = create_test_dir("lossy-open");
     let path = root.join("legacy.txt");
-    write_file_bytes(&path, &[0xFF, 0xFE, b'a', b'b']);
+    write_file_bytes(&path, &[0x80, 0x81, b'a', b'b']);
 
     let opened = read_markdown_document(&path).expect("document should open with lossy decoding");
 
     assert_eq!(opened.file_name, "legacy.txt");
     assert!(opened.content.ends_with("ab"));
+    assert_eq!(opened.encoding, DocumentEncoding::Lossy8Bit);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn read_markdown_document_detects_utf8_bom_encoding() {
+    let root = create_test_dir("utf8-bom-open");
+    let path = root.join("bom.md");
+    write_file_bytes(&path, &[0xEF, 0xBB, 0xBF, b'a', b'b', b'c']);
+
+    let opened = read_markdown_document(&path).expect("document should open");
+
+    assert_eq!(opened.content, "abc");
+    assert_eq!(opened.encoding, DocumentEncoding::Utf8Bom);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn read_markdown_document_detects_utf16le_encoding() {
+    let root = create_test_dir("utf16le-open");
+    let path = root.join("utf16le.txt");
+    write_utf16_le_with_bom(&path, "hello");
+
+    let opened = read_markdown_document(&path).expect("document should open");
+
+    assert_eq!(opened.content, "hello");
+    assert_eq!(opened.encoding, DocumentEncoding::Utf16Le);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn read_markdown_document_detects_utf16be_encoding() {
+    let root = create_test_dir("utf16be-open");
+    let path = root.join("utf16be.txt");
+    write_utf16_be_with_bom(&path, "hello");
+
+    let opened = read_markdown_document(&path).expect("document should open");
+
+    assert_eq!(opened.content, "hello");
+    assert_eq!(opened.encoding, DocumentEncoding::Utf16Be);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn save_markdown_file_preserves_utf8_bom_encoding() {
+    let root = create_test_dir("utf8-bom-save");
+    let path = root.join("bom.md");
+
+    let saved = save_markdown_file(
+      path.to_string_lossy().into_owned(),
+      "hello".to_string(),
+      DocumentEncoding::Utf8Bom,
+    )
+    .expect("save should succeed");
+
+    let bytes = fs::read(&path).expect("saved bytes should be readable");
+
+    assert_eq!(&bytes[..3], &[0xEF, 0xBB, 0xBF]);
+    assert_eq!(saved.encoding, DocumentEncoding::Utf8Bom);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn save_markdown_file_preserves_utf16le_encoding() {
+    let root = create_test_dir("utf16le-save");
+    let path = root.join("utf16le.txt");
+
+    let saved = save_markdown_file(
+      path.to_string_lossy().into_owned(),
+      "hello".to_string(),
+      DocumentEncoding::Utf16Le,
+    )
+    .expect("save should succeed");
+
+    let bytes = fs::read(&path).expect("saved bytes should be readable");
+
+    assert_eq!(&bytes[..2], &[0xFF, 0xFE]);
+    assert_eq!(saved.encoding, DocumentEncoding::Utf16Le);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[test]
+  fn save_markdown_file_rejects_lossy_8bit_encoding() {
+    let root = create_test_dir("lossy-save");
+    let path = root.join("legacy.txt");
+
+    let error = save_markdown_file(
+      path.to_string_lossy().into_owned(),
+      "hello".to_string(),
+      DocumentEncoding::Lossy8Bit,
+    )
+    .expect_err("lossy encoding should be rejected");
+
+    assert_eq!(
+      error,
+      "This file uses an unknown legacy encoding and cannot be safely saved."
+    );
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn duplicate_fs_entry_rejects_symlink_directory_and_rolls_back() {
+    use std::os::unix::fs::symlink;
+
+    let root = create_test_dir("duplicate-symlink");
+    let source = root.join("source");
+    let target_file = root.join("target.txt");
+    fs::create_dir_all(&source).expect("source directory should be created");
+    write_file(&target_file, "target");
+    symlink(&target_file, source.join("link.txt")).expect("symlink should be created");
+
+    let error = duplicate_fs_entry(source.to_string_lossy().into_owned())
+      .expect_err("directory duplicate should reject symlinks");
+
+    assert_eq!(
+      error,
+      "Cannot duplicate directories containing symbolic links or reparse points."
+    );
+    assert!(!root.join("source copy").exists());
 
     fs::remove_dir_all(root).expect("test directory should be removed");
   }
