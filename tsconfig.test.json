@@ -10,6 +10,7 @@
     "rootDir": "."
   },
   "include": [
+    "src/delete-confirm-focus-state.ts",
     "src/find-replace-state.ts",
     "src/milkdown-sync-state.ts",
     "src/save-flow-state.ts",

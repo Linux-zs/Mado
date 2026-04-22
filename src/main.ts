@@ -51,6 +51,13 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
 import {
+  createDeleteConfirmDialogResult,
+  createDeleteConfirmRestoreTargetFromContext,
+  getDeleteConfirmRestoreCandidateKinds,
+  type DeleteConfirmDialogResult,
+  type DeleteConfirmRestoreTarget
+} from './delete-confirm-focus-state';
+import {
   computeFindMatchActiveIndex,
   getFindMatchStart
 } from './find-replace-state';
@@ -285,6 +292,7 @@ type DeleteConfirmDialogOptions = {
   title: string;
   description: string;
   confirmText: string;
+  restoreTarget?: DeleteConfirmRestoreTarget;
 };
 type DirectoryRefreshOptions = {
   activationToken?: number;
@@ -568,7 +576,8 @@ let sidebarScrollPositions = new Map<SidebarMode, { top: number; left: number }>
 let headerNotice: { text: string; isError: boolean } | null = null;
 let headerNoticeTimer: number | null = null;
 let renameDialogResolver: ((value: string | null) => void) | null = null;
-let deleteConfirmResolver: ((value: boolean) => void) | null = null;
+let deleteConfirmResolver: ((value: DeleteConfirmDialogResult) => void) | null = null;
+let deleteConfirmRestoreTarget: DeleteConfirmRestoreTarget = { kind: 'fallback-editor' };
 let editorViewMode: EditorViewMode = 'rendered';
 let milkdownEditor: Editor | null = null;
 let milkdownDocumentId: string | null = null;
@@ -798,6 +807,7 @@ sidebarBody.className = 'sidebar-body';
 const filesSidebarView = document.createElement('div');
 filesSidebarView.className = 'sidebar-view sidebar-view-files is-active';
 filesSidebarView.dataset.mode = FILES_MODE;
+filesSidebarView.tabIndex = -1;
 const filesSidebarSearchBar = document.createElement('div');
 filesSidebarSearchBar.className = 'sidebar-search';
 const filesSidebarSearchInput = document.createElement('input');
@@ -823,6 +833,7 @@ filesSidebarView.append(filesSidebarSearchBar, filesSidebarNotice, filesSidebarE
 const outlineSidebarView = document.createElement('div');
 outlineSidebarView.className = 'sidebar-view sidebar-view-outline is-inactive';
 outlineSidebarView.dataset.mode = OUTLINE_MODE;
+outlineSidebarView.tabIndex = -1;
 const outlineSidebarEmpty = document.createElement('p');
 outlineSidebarEmpty.className = 'sidebar-empty';
 outlineSidebarEmpty.hidden = true;
@@ -2607,6 +2618,197 @@ function loadRecentFiles(): RecentFileEntry[] {
   } catch {
     return [];
   }
+}
+
+function createDeleteConfirmRestoreTargetForSidebarTarget(
+  target: Extract<SidebarContextTarget, { kind: 'file' | 'folder' }>
+): DeleteConfirmRestoreTarget {
+  const filePath = target.kind === 'file' ? target.filePath || null : target.path;
+  const relativePath =
+    currentDirectoryPath && filePath ? getRelativePathFromRoot(filePath, currentDirectoryPath) : null;
+
+  return createDeleteConfirmRestoreTargetFromContext({
+    kind: 'files-row',
+    documentId: target.kind === 'file' ? target.documentId : null,
+    filePath,
+    relativePath
+  });
+}
+
+function captureDeleteConfirmRestoreTarget(): DeleteConfirmRestoreTarget {
+  const activeElement = document.activeElement;
+
+  if (activeElement === sourceTextarea) {
+    return createDeleteConfirmRestoreTargetFromContext({ kind: 'source-editor' });
+  }
+
+  if (!(activeElement instanceof HTMLElement)) {
+    return createDeleteConfirmRestoreTargetFromContext({ kind: 'unknown' });
+  }
+
+  if (activeElement.closest('.editor-surface')) {
+    return createDeleteConfirmRestoreTargetFromContext({ kind: 'rendered-editor' });
+  }
+
+  if (activeElement === filesSidebarSearchInput) {
+    return createDeleteConfirmRestoreTargetFromContext({ kind: 'files-search' });
+  }
+
+  const fileTreeRow = activeElement.closest('.file-tree-row') as HTMLElement | null;
+
+  if (fileTreeRow) {
+    return createDeleteConfirmRestoreTargetFromContext({
+      kind: 'files-row',
+      documentId: fileTreeRow.dataset.documentId || null,
+      filePath: fileTreeRow.dataset.filePath || null,
+      relativePath: fileTreeRow.dataset.relativePath || null
+    });
+  }
+
+  const outlineItem = activeElement.closest('.outline-item') as HTMLButtonElement | null;
+
+  if (outlineItem) {
+    const pos = Number(outlineItem.dataset.pos);
+    return createDeleteConfirmRestoreTargetFromContext({
+      kind: 'outline-item',
+      pos: Number.isFinite(pos) ? pos : null
+    });
+  }
+
+  if (activeElement.closest('.sidebar-view-files')) {
+    return createDeleteConfirmRestoreTargetFromContext({ kind: 'files-view' });
+  }
+
+  if (activeElement.closest('.sidebar-view-outline')) {
+    return createDeleteConfirmRestoreTargetFromContext({ kind: 'outline-view' });
+  }
+
+  return createDeleteConfirmRestoreTargetFromContext({ kind: 'unknown' });
+}
+
+function canRestoreFocusToElement(element: HTMLElement | null): element is HTMLElement {
+  if (!element || !element.isConnected || element.inert) {
+    return false;
+  }
+
+  if (element.closest('[aria-hidden="true"]')) {
+    return false;
+  }
+
+  if (element.matches(':disabled')) {
+    return false;
+  }
+
+  if (element.offsetParent === null && window.getComputedStyle(element).position !== 'fixed') {
+    return false;
+  }
+
+  return true;
+}
+
+function tryFocusDeleteConfirmElement(element: HTMLElement | null): boolean {
+  if (!canRestoreFocusToElement(element)) {
+    return false;
+  }
+
+  element.focus();
+  return document.activeElement === element || element.contains(document.activeElement);
+}
+
+function findDeleteConfirmFilesRow(
+  target: Extract<DeleteConfirmRestoreTarget, { kind: 'files-row' }>
+): HTMLButtonElement | null {
+  const rows = filesSidebarList.querySelectorAll<HTMLButtonElement>('.file-tree-row');
+
+  if (target.documentId) {
+    for (const row of rows) {
+      if (row.dataset.documentId === target.documentId) {
+        return row;
+      }
+    }
+  }
+
+  if (target.filePath) {
+    for (const row of rows) {
+      if (row.dataset.filePath === target.filePath) {
+        return row;
+      }
+    }
+  }
+
+  if (target.relativePath) {
+    for (const row of rows) {
+      if (row.dataset.relativePath === target.relativePath) {
+        return row;
+      }
+    }
+  }
+
+  return null;
+}
+
+function findDeleteConfirmOutlineItem(
+  target: Extract<DeleteConfirmRestoreTarget, { kind: 'outline-item' }>
+): HTMLButtonElement | null {
+  if (!Number.isFinite(target.pos)) {
+    return null;
+  }
+
+  return (
+    [...outlineSidebarList.querySelectorAll<HTMLButtonElement>('.outline-item')].find(
+      (button) => Number(button.dataset.pos) === target.pos
+    ) ?? null
+  );
+}
+
+function tryRestoreDeleteConfirmFocusCandidate(
+  candidate: DeleteConfirmRestoreTarget['kind'],
+  target: DeleteConfirmRestoreTarget
+): boolean {
+  switch (candidate) {
+    case 'source-editor': {
+      const activeDocument = getActiveDocument();
+
+      if (!activeDocument || editorViewMode !== 'source') {
+        return false;
+      }
+
+      restoreSourceEditorContext(activeDocument);
+      return tryFocusDeleteConfirmElement(sourceTextarea);
+    }
+    case 'rendered-editor': {
+      if (editorViewMode !== 'rendered') {
+        return false;
+      }
+
+      const beforeFocus = document.activeElement;
+      focusActiveCommandContext();
+      return document.activeElement !== beforeFocus || document.activeElement?.closest('.editor-surface') !== null;
+    }
+    case 'files-search':
+      return !filesSidebarSearchBar.classList.contains('is-hidden') && tryFocusDeleteConfirmElement(filesSidebarSearchInput);
+    case 'files-row':
+      return target.kind === 'files-row' && tryFocusDeleteConfirmElement(findDeleteConfirmFilesRow(target));
+    case 'files-view':
+      return tryFocusDeleteConfirmElement(filesSidebarView);
+    case 'outline-item':
+      return target.kind === 'outline-item' && tryFocusDeleteConfirmElement(findDeleteConfirmOutlineItem(target));
+    case 'outline-view':
+      return tryFocusDeleteConfirmElement(outlineSidebarView);
+    case 'fallback-editor':
+      focusActiveCommandContext();
+      return true;
+  }
+}
+
+function scheduleDeleteConfirmFocusRestore(target: DeleteConfirmRestoreTarget): void {
+  window.requestAnimationFrame(() => {
+    for (const candidate of getDeleteConfirmRestoreCandidateKinds(target)) {
+      if (tryRestoreDeleteConfirmFocusCandidate(candidate, target)) {
+        return;
+      }
+    }
+  });
 }
 
 function createRecentMenuEntries(): RecentMenuEntry[] {
@@ -4470,6 +4672,7 @@ async function closeDocument(
 ): Promise<void> {
   syncActiveDocumentFromEditor();
   closeFindReplaceBar();
+  let discardRestoreTarget: DeleteConfirmRestoreTarget | null = null;
 
   const document = documents.find((entry) => entry.id === documentId);
 
@@ -4478,11 +4681,14 @@ async function closeDocument(
   }
 
   if (document.isDirty && !options.skipDirtyConfirm) {
-    const shouldDiscard = await confirmDiscardDocument(document);
+    const discardResult = await confirmDiscardDocument(document);
 
-    if (!shouldDiscard) {
+    if (!discardResult.confirmed) {
+      scheduleDeleteConfirmFocusRestore(discardResult.restoreTarget);
       return;
     }
+
+    discardRestoreTarget = discardResult.restoreTarget;
   }
 
   const replacementDocumentId =
@@ -4504,6 +4710,10 @@ async function closeDocument(
 
   requestRender({ editor: true });
   requestSidebarRefreshForCurrentMode();
+
+  if (discardRestoreTarget) {
+    scheduleDeleteConfirmFocusRestore(discardRestoreTarget);
+  }
 }
 
 function compareFileTreeNodes(left: FileTreeNode, right: FileTreeNode): number {
@@ -7480,7 +7690,10 @@ async function duplicateSidebarEntryActive(path: string): Promise<void> {
   }
 }
 
-async function deleteSidebarEntryActive(path: string): Promise<void> {
+async function deleteSidebarEntryActive(
+  path: string,
+  restoreTarget: DeleteConfirmRestoreTarget
+): Promise<void> {
   const openDocuments = getOpenDocumentsWithinPath(path);
 
   if (openDocuments.some((document) => isDocumentUnsaved(document))) {
@@ -7491,13 +7704,15 @@ async function deleteSidebarEntryActive(path: string): Promise<void> {
   const itemName = getFileNameFromPath(path);
   const extraNote =
     openDocuments.length > 0 ? `\n\n\u76f8\u5173\u5df2\u6253\u5f00\u6587\u6863\u4f1a\u5148\u5173\u95ed\uff1a${openDocuments.length} \u4e2a\u3002` : '';
-  const shouldDelete = await showDeleteConfirmDialog({
+  const deleteResult = await showDeleteConfirmDialog({
     title: '\u786e\u8ba4\u5220\u9664',
     description: `\u786e\u5b9a\u5c06\u201c${itemName}\u201d\u79fb\u5230\u56de\u6536\u7ad9\u5417\uff1f${extraNote}`,
-    confirmText: '\u5220\u9664'
+    confirmText: '\u5220\u9664',
+    restoreTarget
   });
 
-  if (!shouldDelete) {
+  if (!deleteResult.confirmed) {
+    scheduleDeleteConfirmFocusRestore(deleteResult.restoreTarget);
     return;
   }
 
@@ -7511,6 +7726,8 @@ async function deleteSidebarEntryActive(path: string): Promise<void> {
   } catch (error) {
     showHeaderNotice(getErrorMessage(error, '\u5220\u9664\u5931\u8d25\u3002'), true);
   }
+
+  scheduleDeleteConfirmFocusRestore(deleteResult.restoreTarget);
 }
 
 async function renameSidebarFileEntryActive(
@@ -7665,12 +7882,15 @@ function buildActiveSidebarContextMenuItems(target: SidebarContextTarget): Conte
           !(target.kind === 'folder' && target.isRoot),
         action: async () => {
           if (target.kind === 'file' && !target.filePath && target.documentId) {
-            await confirmDiscardUntitledSidebarDocument(target.documentId);
+            await confirmDiscardUntitledSidebarDocument(
+              target.documentId,
+              createDeleteConfirmRestoreTargetForSidebarTarget(target)
+            );
             return;
           }
 
           if (filePath) {
-            await deleteSidebarEntryActive(filePath);
+            await deleteSidebarEntryActive(filePath, createDeleteConfirmRestoreTargetForSidebarTarget(target));
           }
         }
       },
@@ -7779,32 +7999,37 @@ async function validateFolderName(value: string): Promise<string> {
   return trimmed;
 }
 
-async function confirmDiscardUntitledSidebarDocument(documentId: string): Promise<void> {
+async function confirmDiscardUntitledSidebarDocument(
+  documentId: string,
+  restoreTarget: DeleteConfirmRestoreTarget
+): Promise<void> {
   const document = documents.find((entry) => entry.id === documentId);
 
   if (!document) {
     return;
   }
 
-  const shouldDiscard = await confirmDiscardDocument(document);
+  const discardResult = await confirmDiscardDocument(document, restoreTarget);
 
-  if (!shouldDiscard) {
+  if (!discardResult.confirmed) {
+    scheduleDeleteConfirmFocusRestore(discardResult.restoreTarget);
     return;
   }
 
   await closeDocument(documentId, { skipDirtyConfirm: true });
+  scheduleDeleteConfirmFocusRestore(discardResult.restoreTarget);
 }
 
 async function confirmDiscardDocument(
-  document: Pick<DocumentState, 'fileName'>
-): Promise<boolean> {
-  const shouldDiscard = await showDeleteConfirmDialog({
+  document: Pick<DocumentState, 'fileName'>,
+  restoreTarget?: DeleteConfirmRestoreTarget
+): Promise<DeleteConfirmDialogResult> {
+  return await showDeleteConfirmDialog({
     title: '\u5173\u95ed\u672a\u4fdd\u5b58\u6587\u6863',
     description: `\u786e\u5b9a\u5173\u95ed\u201c${document.fileName}\u201d\u5e76\u4e22\u5f03\u672a\u4fdd\u5b58\u7684\u5185\u5bb9\u5417\uff1f`,
-    confirmText: '\u5173\u95ed'
+    confirmText: '\u5173\u95ed',
+    restoreTarget
   });
-
-  return shouldDiscard;
 }
 
 async function validateMarkdownSavePath(filePath: string): Promise<string | null> {
@@ -7910,18 +8135,16 @@ function showRenameDialog(options: RenameDialogOptions): Promise<string | null> 
 function closeDeleteConfirmDialog(result: boolean): void {
   deleteConfirmOverlay.classList.add('is-hidden');
   const resolver = deleteConfirmResolver;
+  const dialogResult = createDeleteConfirmDialogResult(result, deleteConfirmRestoreTarget);
   deleteConfirmResolver = null;
+  deleteConfirmRestoreTarget = { kind: 'fallback-editor' };
 
   if (resolver) {
-    resolver(result);
+    resolver(dialogResult);
   }
-
-  window.requestAnimationFrame(() => {
-    focusActiveCommandContext();
-  });
 }
 
-function showDeleteConfirmDialog(options: DeleteConfirmDialogOptions): Promise<boolean> {
+function showDeleteConfirmDialog(options: DeleteConfirmDialogOptions): Promise<DeleteConfirmDialogResult> {
   if (deleteConfirmResolver) {
     closeDeleteConfirmDialog(false);
   }
@@ -7929,6 +8152,7 @@ function showDeleteConfirmDialog(options: DeleteConfirmDialogOptions): Promise<b
   deleteConfirmTitle.textContent = options.title;
   deleteConfirmDescription.textContent = options.description;
   deleteConfirmSubmit.textContent = options.confirmText;
+  deleteConfirmRestoreTarget = options.restoreTarget ?? captureDeleteConfirmRestoreTarget();
   deleteConfirmOverlay.classList.remove('is-hidden');
 
   return new Promise((resolve) => {
