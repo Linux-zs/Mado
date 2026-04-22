@@ -83,6 +83,7 @@ import {
 } from './save-flow-state';
 import {
   isTablePropertiesInteractionRole,
+  resolveTablePropertiesPanelTransition,
   TABLE_ALIGNMENT_BUTTON_LABELS,
   TABLE_PROPERTIES_ALIGNMENT_LABEL,
   TABLE_PROPERTIES_APPLY_LABEL,
@@ -91,6 +92,7 @@ import {
   normalizeTableColumnAlignment,
   resolveTablePropertiesDraft,
   resolveTableResizePlan,
+  shouldReuseTablePropertiesControls,
   type TableColumnAlignment
 } from './table-overlay-state';
 import {
@@ -5832,6 +5834,42 @@ function attachTablePropertiesPointerGuard(
     }
     event.stopPropagation();
   });
+  element.addEventListener('pointerup', (event) => {
+    event.stopPropagation();
+  });
+  element.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
+}
+
+function syncTableToolOverlayVisibility(): void {
+  if (!tableToolOverlay || !tableToolMenuButton || !tableToolMenu || !tableToolPropertiesButton || !tableToolProperties) {
+    return;
+  }
+
+  tableToolOverlay.classList.toggle('is-menu-open', tableToolMenuOpen);
+  tableToolOverlay.classList.toggle('is-properties-open', tableToolPropertiesOpen);
+  tableToolMenuButton.setAttribute('aria-expanded', String(tableToolMenuOpen));
+  tableToolMenu.classList.toggle('is-hidden', !tableToolMenuOpen);
+  tableToolPropertiesButton.setAttribute('aria-expanded', String(tableToolPropertiesOpen));
+  tableToolProperties.classList.toggle('is-hidden', !tableToolPropertiesOpen);
+}
+
+function isReusableTableToolPropertiesControls(
+  panel: HTMLDivElement,
+  controls: TableToolPropertiesControls
+): boolean {
+  return shouldReuseTablePropertiesControls({
+    hasCachedControls: true,
+    controlsConnected:
+      controls.rowsInput.isConnected &&
+      controls.colsInput.isConnected &&
+      controls.applyButton.isConnected,
+    controlsInsidePanel:
+      panel.contains(controls.rowsInput) &&
+      panel.contains(controls.colsInput) &&
+      panel.contains(controls.applyButton)
+  });
 }
 
 function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null {
@@ -5841,9 +5879,15 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
 
   const existing = tableToolPropertiesControls.get(tableToolProperties);
 
-  if (existing) {
+  if (existing && isReusableTableToolPropertiesControls(tableToolProperties, existing)) {
     return existing;
   }
+
+  if (existing) {
+    tableToolPropertiesControls.delete(tableToolProperties);
+  }
+
+  tableToolProperties.replaceChildren();
 
   const sizeLabel = document.createElement('div');
   sizeLabel.className = 'table-properties-caption';
@@ -5988,25 +6032,22 @@ function setTableToolMenuOpen(nextOpen: boolean): void {
 
   if (nextOpen) {
     tableToolPropertiesOpen = false;
+    tablePropertiesDraft = null;
   }
-
-  if (!tableToolOverlay || !tableToolMenuButton || !tableToolMenu || !tableToolPropertiesButton || !tableToolProperties) {
-    return;
-  }
-
-  tableToolOverlay.classList.toggle('is-menu-open', tableToolMenuOpen);
-  tableToolMenuButton.setAttribute('aria-expanded', String(tableToolMenuOpen));
-  tableToolMenu.classList.toggle('is-hidden', !tableToolMenuOpen);
-  tableToolPropertiesButton.setAttribute('aria-expanded', String(tableToolPropertiesOpen));
-  tableToolProperties.classList.toggle('is-hidden', !tableToolPropertiesOpen);
+  syncTableToolOverlayVisibility();
 }
 
 function setTableToolPropertiesOpen(nextOpen: boolean): void {
-  tableToolPropertiesOpen = nextOpen;
+  const transition = resolveTablePropertiesPanelTransition({
+    previousOpen: tableToolPropertiesOpen,
+    nextOpen,
+    hasActiveTable: !!activeTableToolState
+  });
+  tableToolPropertiesOpen = transition.isOpen;
 
-  if (nextOpen) {
+  if (tableToolPropertiesOpen) {
     tableToolMenuOpen = false;
-    if (activeTableToolState) {
+    if (activeTableToolState && transition.initializeDraft) {
       tablePropertiesDraft = resolveTablePropertiesDraft({
         previousDraft: tablePropertiesDraft,
         previousTableStart: activeTableToolState.tableStart,
@@ -6015,21 +6056,16 @@ function setTableToolPropertiesOpen(nextOpen: boolean): void {
         actualCols: activeTableToolState.colCount,
         preserveExisting: false
       });
-      renderTableToolPropertiesContent();
     }
   } else {
     tablePropertiesDraft = null;
   }
 
-  if (!tableToolOverlay || !tableToolMenuButton || !tableToolMenu || !tableToolPropertiesButton || !tableToolProperties) {
-    return;
+  if (tableToolPropertiesOpen) {
+    renderTableToolPropertiesContent();
   }
 
-  tableToolOverlay.classList.toggle('is-properties-open', tableToolPropertiesOpen);
-  tableToolMenuButton.setAttribute('aria-expanded', String(tableToolMenuOpen));
-  tableToolMenu.classList.toggle('is-hidden', !tableToolMenuOpen);
-  tableToolPropertiesButton.setAttribute('aria-expanded', String(tableToolPropertiesOpen));
-  tableToolProperties.classList.toggle('is-hidden', !tableToolPropertiesOpen);
+  syncTableToolOverlayVisibility();
 }
 
 function closeTableToolMenu(): void {
@@ -6078,6 +6114,7 @@ function clearTableToolOverlay(): void {
   tableToolMenu.classList.add('is-hidden');
   tableToolProperties.classList.add('is-hidden');
   tableToolMenu.replaceChildren();
+  tableToolPropertiesControls.delete(tableToolProperties);
   tableToolProperties.replaceChildren();
 }
 
@@ -6179,8 +6216,7 @@ function renderTableToolOverlay(documentId: string): void {
   if (tableToolPropertiesOpen) {
     renderTableToolPropertiesContent();
   }
-  setTableToolMenuOpen(tableToolMenuOpen);
-  setTableToolPropertiesOpen(tableToolPropertiesOpen);
+  syncTableToolOverlayVisibility();
 }
 
 function applyHeadingBlockSelection(nextBlock: 'paragraph' | (1 | 2 | 3 | 4 | 5 | 6)): void {

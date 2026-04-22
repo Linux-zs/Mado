@@ -46,6 +46,27 @@ export function isTablePropertiesInteractionRole(value: string | null): boolean 
   return TABLE_PROPERTIES_INTERACTION_ROLES.has(value);
 }
 
+export function resolveTablePropertiesPanelTransition(input: {
+  previousOpen: boolean;
+  nextOpen: boolean;
+  hasActiveTable: boolean;
+}): { isOpen: boolean; initializeDraft: boolean } {
+  const isOpen = input.nextOpen && input.hasActiveTable;
+
+  return {
+    isOpen,
+    initializeDraft: isOpen && !input.previousOpen
+  };
+}
+
+export function shouldReuseTablePropertiesControls(input: {
+  hasCachedControls: boolean;
+  controlsConnected: boolean;
+  controlsInsidePanel: boolean;
+}): boolean {
+  return input.hasCachedControls && input.controlsConnected && input.controlsInsidePanel;
+}
+
 export function resolveTableResizePlan(input: {
   currentRows: number;
   currentCols: number;

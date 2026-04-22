@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   isTablePropertiesInteractionRole,
+  resolveTablePropertiesPanelTransition,
   TABLE_ALIGNMENT_BUTTON_LABELS,
   TABLE_PROPERTIES_ALIGNMENT_LABEL,
   TABLE_PROPERTIES_APPLY_LABEL,
@@ -10,7 +11,8 @@ import {
   TABLE_PROPERTIES_SIZE_LABEL,
   normalizeTableColumnAlignment,
   resolveTablePropertiesDraft,
-  resolveTableResizePlan
+  resolveTableResizePlan,
+  shouldReuseTablePropertiesControls
 } from '../.test-dist/src/table-overlay-state.js';
 
 test('resolveTableResizePlan adds rows and columns toward the requested size', () => {
@@ -146,4 +148,59 @@ test('table property interaction roles keep pointer events inside the overlay', 
   assert.equal(isTablePropertiesInteractionRole('align-button'), true);
   assert.equal(isTablePropertiesInteractionRole('caption'), false);
   assert.equal(isTablePropertiesInteractionRole(null), false);
+});
+
+test('resolveTablePropertiesPanelTransition only initializes draft when opening from closed state', () => {
+  assert.deepEqual(
+    resolveTablePropertiesPanelTransition({
+      previousOpen: false,
+      nextOpen: true,
+      hasActiveTable: true
+    }),
+    {
+      isOpen: true,
+      initializeDraft: true
+    }
+  );
+
+  assert.deepEqual(
+    resolveTablePropertiesPanelTransition({
+      previousOpen: true,
+      nextOpen: true,
+      hasActiveTable: true
+    }),
+    {
+      isOpen: true,
+      initializeDraft: false
+    }
+  );
+});
+
+test('shouldReuseTablePropertiesControls rejects detached cached controls', () => {
+  assert.equal(
+    shouldReuseTablePropertiesControls({
+      hasCachedControls: true,
+      controlsConnected: true,
+      controlsInsidePanel: true
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldReuseTablePropertiesControls({
+      hasCachedControls: true,
+      controlsConnected: false,
+      controlsInsidePanel: false
+    }),
+    false
+  );
+
+  assert.equal(
+    shouldReuseTablePropertiesControls({
+      hasCachedControls: false,
+      controlsConnected: false,
+      controlsInsidePanel: false
+    }),
+    false
+  );
 });
