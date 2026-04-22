@@ -9,5 +9,9 @@
     "outDir": ".test-dist",
     "rootDir": "."
   },
-  "include": ["src/find-replace-state.ts"]
+  "include": [
+    "src/find-replace-state.ts",
+    "src/source-history-state.ts",
+    "src/shortcut-guards.ts"
+  ]
 }

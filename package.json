@@ -20,7 +20,7 @@
     "build:web": "vite build",
     "preview:web": "vite preview",
     "test": "tsc --noEmit && npm run test:logic",
-    "test:logic": "tsc -p tsconfig.test.json && node --test tests/find-replace-state.test.mjs"
+    "test:logic": "tsc -p tsconfig.test.json && node --test tests/find-replace-state.test.mjs tests/source-history-state.test.mjs tests/shortcut-guards.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.10.1",

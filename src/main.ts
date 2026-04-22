@@ -42,6 +42,7 @@ import {
   selectedRect
 } from '@milkdown/prose/tables';
 import { history as proseHistory, redo, redoDepth, undo, undoDepth } from '@milkdown/prose/history';
+import type { Node as ProseMirrorNode } from '@milkdown/prose/model';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import type { EditorView } from '@milkdown/prose/view';
 import { nord } from '@milkdown/theme-nord';
@@ -54,6 +55,17 @@ import {
   getFindMatchStart
 } from './find-replace-state';
 import { extendInlineHtmlRemarkHandlers, madoInlineHtmlSupport } from './milkdown-inline-html';
+import {
+  createSourceHistoryState,
+  recordSourceHistorySnapshot,
+  stepSourceHistoryState,
+  type SourceHistorySnapshot,
+  type SourceHistoryState
+} from './source-history-state';
+import {
+  shouldBlockGlobalShortcutTarget,
+  type ShortcutTargetKind
+} from './shortcut-guards';
 import './style.css';
 
 type OpenedDocument = {
@@ -337,17 +349,6 @@ type FindMatch =
       start: number;
       end: number;
     };
-type SourceHistorySnapshot = {
-  content: string;
-  selectionStart: number;
-  selectionEnd: number;
-  scrollTop: number;
-};
-type SourceHistoryState = {
-  snapshot: SourceHistorySnapshot;
-  undoStack: SourceHistorySnapshot[];
-  redoStack: SourceHistorySnapshot[];
-};
 type HighlightJsLanguageDefinition = unknown;
 type HighlightJsModule = {
   default: HighlightJsLanguageDefinition;
@@ -376,6 +377,14 @@ type EditorCommandContext = {
   isInTable: boolean;
   canUndo: boolean;
   canRedo: boolean;
+};
+
+type CodeBlockDecorationInfo = {
+  key: string;
+  pos: number;
+  nodeSize: number;
+  language: string;
+  text: string;
 };
 
 const APP_COMMAND_EVENT = 'request-app-command';
@@ -1699,11 +1708,7 @@ function getSourceHistoryState(
       typeof initialSnapshot === 'string'
         ? createSourceHistorySnapshot(initialSnapshot)
         : initialSnapshot;
-    state = {
-      snapshot,
-      undoStack: [],
-      redoStack: []
-    };
+    state = createSourceHistoryState(snapshot);
     sourceHistoryByDocument.set(documentId, state);
   }
 
@@ -1740,22 +1745,6 @@ function setSourceHistorySnapshot(
   }
 }
 
-function pushSourceUndoSnapshot(state: SourceHistoryState, snapshot: SourceHistorySnapshot): void {
-  state.undoStack.push(snapshot);
-
-  if (state.undoStack.length > SOURCE_HISTORY_LIMIT) {
-    state.undoStack.shift();
-  }
-}
-
-function pushSourceRedoSnapshot(state: SourceHistoryState, snapshot: SourceHistorySnapshot): void {
-  state.redoStack.push(snapshot);
-
-  if (state.redoStack.length > SOURCE_HISTORY_LIMIT) {
-    state.redoStack.shift();
-  }
-}
-
 function rememberSourceEditorContext(document: DocumentState): void {
   document.sourceSelectionStart = sourceTextarea.selectionStart;
   document.sourceSelectionEnd = sourceTextarea.selectionEnd;
@@ -1789,8 +1778,14 @@ function applySourceDocumentChange(
   const previousScrollTop = sourceTextarea.scrollTop;
 
   if (options.recordUndo && state.snapshot.content !== nextContent) {
-    pushSourceUndoSnapshot(state, state.snapshot);
-    state.redoStack = [];
+    const nextState = recordSourceHistorySnapshot(
+      state,
+      createSourceHistorySnapshotFromEditor(nextContent),
+      SOURCE_HISTORY_LIMIT
+    );
+    sourceHistoryByDocument.set(activeDocument.id, nextState);
+    state.undoStack = nextState.undoStack;
+    state.redoStack = nextState.redoStack;
   }
 
   sourceTextarea.value = nextContent;
@@ -1804,7 +1799,8 @@ function applySourceDocumentChange(
   );
   sourceTextarea.scrollTop = options.scrollTop ?? previousScrollTop;
   syncSourceEditorDocumentState(activeDocument);
-  state.snapshot = createSourceHistorySnapshotFromEditor(nextContent);
+  const currentState = sourceHistoryByDocument.get(activeDocument.id) ?? state;
+  currentState.snapshot = createSourceHistorySnapshotFromEditor(nextContent);
   rememberSourceEditorContext(activeDocument);
   renderDocumentHeader();
   sourceTextarea.focus();
@@ -1813,14 +1809,12 @@ function applySourceDocumentChange(
 
 function recordSourceInputHistory(document: DocumentState, nextContent: string): void {
   const state = getSourceHistoryState(document.id, createSourceHistorySnapshotFromDocument(document));
-
-  if (state.snapshot.content === nextContent) {
-    return;
-  }
-
-  pushSourceUndoSnapshot(state, state.snapshot);
-  state.redoStack = [];
-  state.snapshot = createSourceHistorySnapshotFromEditor(nextContent);
+  const nextState = recordSourceHistorySnapshot(
+    state,
+    createSourceHistorySnapshotFromEditor(nextContent),
+    SOURCE_HISTORY_LIMIT
+  );
+  sourceHistoryByDocument.set(document.id, nextState);
 }
 
 function renderStatusBar(): void {
@@ -5975,30 +5969,45 @@ function getShortcutEventTargetElement(target: EventTarget | null): HTMLElement 
   return null;
 }
 
-function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
-  if (!renameOverlay.classList.contains('is-hidden')) {
-    return true;
-  }
-
+function getShortcutTargetKind(target: EventTarget | null): ShortcutTargetKind {
   const element = getShortcutEventTargetElement(target);
 
   if (!element) {
-    return false;
+    return 'none';
   }
 
-  if (element === sourceTextarea || element.closest('.milkdown-host')) {
-    return false;
+  if (element === sourceTextarea) {
+    return 'source';
   }
 
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-    return true;
+  if (element.closest('.milkdown-host')) {
+    return 'milkdown';
+  }
+
+  if (element instanceof HTMLInputElement) {
+    return 'input';
+  }
+
+  if (element instanceof HTMLTextAreaElement) {
+    return 'textarea';
+  }
+
+  if (element instanceof HTMLSelectElement) {
+    return 'select';
   }
 
   if (element.isContentEditable) {
-    return true;
+    return 'contentEditable';
   }
 
-  return false;
+  return 'other';
+}
+
+function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
+  return shouldBlockGlobalShortcutTarget({
+    renameDialogOpen: !renameOverlay.classList.contains('is-hidden'),
+    targetKind: getShortcutTargetKind(target)
+  });
 }
 
 function normalizeShortcutEventKey(event: KeyboardEvent): string {
@@ -6089,29 +6098,10 @@ function canHandleFileShortcutEvent(event: KeyboardEvent): boolean {
 }
 
 function isBlockingEditShortcutTarget(target: EventTarget | null): boolean {
-  if (!renameOverlay.classList.contains('is-hidden')) {
-    return true;
-  }
-
-  const element = getShortcutEventTargetElement(target);
-
-  if (!element) {
-    return false;
-  }
-
-  if (element === sourceTextarea || element.closest('.milkdown-host')) {
-    return false;
-  }
-
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-    return true;
-  }
-
-  if (element.isContentEditable) {
-    return true;
-  }
-
-  return false;
+  return shouldBlockGlobalShortcutTarget({
+    renameDialogOpen: !renameOverlay.classList.contains('is-hidden'),
+    targetKind: getShortcutTargetKind(target)
+  });
 }
 
 function canHandleEditShortcutEvent(event: KeyboardEvent): boolean {
@@ -6201,32 +6191,21 @@ function executeSourceEditCommand(commandId: Extract<EditCommandId, 'undo' | 're
     createSourceHistorySnapshotFromDocument(activeDocument)
   );
 
-  if (commandId === 'undo') {
-    const nextSnapshot = state.undoStack.pop();
+  const { state: nextState, snapshot } = stepSourceHistoryState(
+    state,
+    commandId,
+    SOURCE_HISTORY_LIMIT
+  );
 
-    if (nextSnapshot === undefined) {
-      return false;
-    }
-
-    state.redoStack.push(state.snapshot);
-    return applySourceDocumentChange(nextSnapshot.content, {
-      selectionStart: nextSnapshot.selectionStart,
-      selectionEnd: nextSnapshot.selectionEnd,
-      scrollTop: nextSnapshot.scrollTop
-    });
-  }
-
-  const nextSnapshot = state.redoStack.pop();
-
-  if (nextSnapshot === undefined) {
+  if (!snapshot) {
     return false;
   }
 
-  pushSourceUndoSnapshot(state, state.snapshot);
-  return applySourceDocumentChange(nextSnapshot.content, {
-    selectionStart: nextSnapshot.selectionStart,
-    selectionEnd: nextSnapshot.selectionEnd,
-    scrollTop: nextSnapshot.scrollTop
+  sourceHistoryByDocument.set(activeDocument.id, nextState);
+  return applySourceDocumentChange(snapshot.content, {
+    selectionStart: snapshot.selectionStart,
+    selectionEnd: snapshot.selectionEnd,
+    scrollTop: snapshot.scrollTop
   });
 }
 
@@ -6710,7 +6689,8 @@ function collectHighlightDecorationsFromNode(
   codeStart: number,
   offset: number,
   classNames: string[],
-  decorations: Decoration[]
+  decorations: Decoration[],
+  spec?: { codeBlockKey: string }
 ): number {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
@@ -6718,9 +6698,14 @@ function collectHighlightDecorationsFromNode(
 
     if (text.length > 0 && classNames.length > 0) {
       decorations.push(
-        Decoration.inline(codeStart + offset, codeStart + nextOffset, {
-          class: [...new Set(classNames)].join(' ')
-        })
+        Decoration.inline(
+          codeStart + offset,
+          codeStart + nextOffset,
+          {
+            class: [...new Set(classNames)].join(' ')
+          },
+          spec
+        )
       );
     }
 
@@ -6747,7 +6732,8 @@ function collectHighlightDecorationsFromNode(
       codeStart,
       nextOffset,
       nextClassNames,
-      decorations
+      decorations,
+      spec
     );
   }
 
@@ -6776,33 +6762,149 @@ function documentHasCodeBlockBetween(
   return hasCodeBlock;
 }
 
-function transactionTouchesCodeBlock(
+function createCodeBlockDecorationInfo(
+  node: ProseMirrorNode,
+  position: number
+): CodeBlockDecorationInfo | null {
+  if (node.type.name !== 'code_block') {
+    return null;
+  }
+
+  const language = normalizeCodeBlockLanguage(node.attrs.language);
+
+  if (!language || node.textContent.length === 0) {
+    return null;
+  }
+
+  return {
+    key: `${position}:${language}:${node.textContent.length}`,
+    pos: position,
+    nodeSize: node.nodeSize,
+    language,
+    text: node.textContent
+  };
+}
+
+function collectCodeBlockDecorationInfos(
+  doc: EditorView['state']['doc'],
+  range?: { from: number; to: number }
+): CodeBlockDecorationInfo[] {
+  const blocks = new Map<string, CodeBlockDecorationInfo>();
+  const visit = (node: ProseMirrorNode, position: number) => {
+    const info = createCodeBlockDecorationInfo(node, position);
+
+    if (info) {
+      blocks.set(info.key, info);
+      return false;
+    }
+
+    return true;
+  };
+
+  if (range) {
+    const docSize = doc.content.size;
+    const from = Math.max(0, Math.min(range.from, docSize));
+    const to = Math.max(from, Math.min(range.to, docSize));
+    doc.nodesBetween(from, Math.min(to + 1, docSize), visit);
+  } else {
+    doc.descendants(visit);
+  }
+
+  return [...blocks.values()];
+}
+
+function collectTouchedCodeBlockDecorationInfos(
   tr: Parameters<NonNullable<Plugin['spec']['state']>['apply']>[0],
   previousDoc: EditorView['state']['doc'],
   nextDoc: EditorView['state']['doc']
-): boolean {
-  let touchesCodeBlock = false;
+): CodeBlockDecorationInfo[] {
+  const blocks = new Map<string, CodeBlockDecorationInfo>();
 
   for (const map of tr.mapping.maps) {
     map.forEach((oldStart, oldEnd, newStart, newEnd) => {
-      if (touchesCodeBlock) {
-        return;
-      }
-
       if (
         documentHasCodeBlockBetween(previousDoc, oldStart, oldEnd) ||
         documentHasCodeBlockBetween(nextDoc, newStart, newEnd)
       ) {
-        touchesCodeBlock = true;
+        for (const block of collectCodeBlockDecorationInfos(nextDoc, {
+          from: newStart,
+          to: newEnd
+        })) {
+          blocks.set(block.key, block);
+        }
       }
     });
-
-    if (touchesCodeBlock) {
-      break;
-    }
   }
 
-  return touchesCodeBlock;
+  return [...blocks.values()];
+}
+
+function buildCodeBlockHighlightDecorationsForInfo(info: CodeBlockDecorationInfo): Decoration[] {
+  if (
+    !highlightJsApi ||
+    !registeredHighlightLanguages.has(info.language) ||
+    !highlightJsApi.getLanguage(info.language)
+  ) {
+    return [];
+  }
+
+  const highlighted = getCachedHighlightedMarkup(highlightJsApi, info.language, info.text);
+
+  if (!highlighted) {
+    return [];
+  }
+
+  const root = codeBlockHighlightParser.parseFromString(`<div>${highlighted}</div>`, 'text/html').body
+    .firstElementChild;
+
+  if (!root) {
+    return [];
+  }
+
+  const decorations: Decoration[] = [];
+  const codeStart = info.pos + 1;
+  let offset = 0;
+  const spec = { codeBlockKey: info.key };
+
+  decorations.push(
+    Decoration.node(
+      info.pos,
+      info.pos + info.nodeSize,
+      {
+        class: 'code-block-highlighted'
+      },
+      spec
+    )
+  );
+
+  for (const child of Array.from(root.childNodes)) {
+    offset = collectHighlightDecorationsFromNode(child, codeStart, offset, [], decorations, spec);
+  }
+
+  return decorations;
+}
+
+function removeCodeBlockDecorations(
+  decorations: DecorationSet,
+  blocks: CodeBlockDecorationInfo[]
+): DecorationSet {
+  if (blocks.length === 0) {
+    return decorations;
+  }
+
+  const toRemove: Decoration[] = [];
+
+  for (const block of blocks) {
+    toRemove.push(
+      ...decorations.find(
+        block.pos,
+        block.pos + block.nodeSize,
+        (spec) => typeof spec === 'object' && spec !== null && 'codeBlockKey' in spec && spec.codeBlockKey === block.key
+      )
+    );
+  }
+
+  return toRemove.length > 0 ? decorations.remove(toRemove) : decorations;
 }
 
 function buildCodeBlockHighlightDecorations(doc: EditorView['state']['doc']): DecorationSet {
@@ -6812,52 +6914,9 @@ function buildCodeBlockHighlightDecorations(doc: EditorView['state']['doc']): De
     return DecorationSet.empty;
   }
 
-  const decorations: Decoration[] = [];
-
-  doc.descendants((node, position) => {
-    if (node.type.name !== 'code_block') {
-      return true;
-    }
-
-    const language = normalizeCodeBlockLanguage(node.attrs.language);
-
-    if (
-      !language ||
-      node.textContent.length === 0 ||
-      !registeredHighlightLanguages.has(language) ||
-      !highlightJsApi?.getLanguage(language)
-    ) {
-      return true;
-    }
-
-    const highlighted = getCachedHighlightedMarkup(highlightJsApi, language, node.textContent);
-
-    if (!highlighted) {
-      return true;
-    }
-
-    const root = codeBlockHighlightParser.parseFromString(`<div>${highlighted}</div>`, 'text/html').body
-      .firstElementChild;
-
-    if (!root) {
-      return true;
-    }
-
-    const codeStart = position + 1;
-    let offset = 0;
-
-    decorations.push(
-      Decoration.node(position, position + node.nodeSize, {
-        class: 'code-block-highlighted'
-      })
-    );
-
-    for (const child of Array.from(root.childNodes)) {
-      offset = collectHighlightDecorationsFromNode(child, codeStart, offset, [], decorations);
-    }
-
-    return true;
-  });
+  const decorations = collectCodeBlockDecorationInfos(doc).flatMap((info) =>
+    buildCodeBlockHighlightDecorationsForInfo(info)
+  );
 
   return DecorationSet.create(doc, decorations);
 }
@@ -6878,12 +6937,23 @@ function createCodeBlockHighlightPlugin(): Plugin {
           return previous.map(tr.mapping, tr.doc);
         }
 
-        if (!transactionTouchesCodeBlock(tr, oldState.doc, tr.doc)) {
+        const touchedBlocks = collectTouchedCodeBlockDecorationInfos(tr, oldState.doc, tr.doc);
+
+        if (touchedBlocks.length === 0) {
           requestCodeBlockHighlightSupport(tr.doc);
           return previous.map(tr.mapping, tr.doc);
         }
 
-        return buildCodeBlockHighlightDecorations(tr.doc);
+        let nextDecorations = previous.map(tr.mapping, tr.doc);
+        nextDecorations = removeCodeBlockDecorations(nextDecorations, touchedBlocks);
+
+        const rebuiltDecorations = touchedBlocks.flatMap((block) =>
+          buildCodeBlockHighlightDecorationsForInfo(block)
+        );
+
+        return rebuiltDecorations.length > 0
+          ? nextDecorations.add(tr.doc, rebuiltDecorations)
+          : nextDecorations;
       }
     },
     props: {
