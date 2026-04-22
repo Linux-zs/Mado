@@ -8,9 +8,9 @@
   --motion-slow: 200ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-fade-distance: 8px;
-  --font-ui: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
-  --font-body: Georgia, 'Times New Roman', 'Microsoft YaHei UI', serif;
-  --font-heading: Georgia, 'Times New Roman', 'Microsoft YaHei UI', serif;
+  --font-ui: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --font-body: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --font-heading: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-code: Consolas, 'Cascadia Code', 'Microsoft YaHei UI', monospace;
   --color-app-bg: #f3efe7;
   --color-body-gradient-start: #fbf9f5;
@@ -986,7 +986,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
 .milkdown-host .ProseMirror h6 {
   font-family: var(--font-heading);
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   color: var(--color-editor-heading);
 }
 

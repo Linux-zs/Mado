@@ -20,7 +20,7 @@
     "build:web": "vite build",
     "preview:web": "vite preview",
     "test": "tsc --noEmit && npm run test:logic",
-    "test:logic": "tsc -p tsconfig.test.json && node --test tests/find-replace-state.test.mjs tests/source-history-state.test.mjs tests/shortcut-guards.test.mjs tests/save-flow-state.test.mjs tests/milkdown-sync-state.test.mjs tests/delete-confirm-focus-state.test.mjs tests/directory-refresh-state.test.mjs tests/recent-files-error-state.test.mjs tests/code-block-language-state.test.mjs tests/table-overlay-state.test.mjs tests/appearance-state.test.mjs tests/appearance-rendering-style.test.mjs"
+    "test:logic": "tsc -p tsconfig.test.json && node --test tests/find-replace-state.test.mjs tests/source-history-state.test.mjs tests/shortcut-guards.test.mjs tests/save-flow-state.test.mjs tests/milkdown-sync-state.test.mjs tests/delete-confirm-focus-state.test.mjs tests/directory-refresh-state.test.mjs tests/recent-files-error-state.test.mjs tests/code-block-language-state.test.mjs tests/table-overlay-state.test.mjs tests/appearance-state.test.mjs tests/appearance-rendering-style.test.mjs tests/default-font-baseline-style.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.10.1",
