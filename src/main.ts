@@ -55,7 +55,10 @@ import {
   getFindMatchStart
 } from './find-replace-state';
 import { extendInlineHtmlRemarkHandlers, madoInlineHtmlSupport } from './milkdown-inline-html';
-import { resolveMarkdownSyncDecision } from './milkdown-sync-state';
+import {
+  resolveMarkdownSyncDecision,
+  synchronizeMarkdownContent
+} from './milkdown-sync-state';
 import {
   getErrorMessage,
   resolveSaveFlowDecision
@@ -3828,34 +3831,34 @@ function syncMilkdownSessionDocumentBeforeDestroy(session: MilkdownSession): voi
     return;
   }
 
-  if (session.documentId === milkdownDocumentId) {
-    applyMilkdownMarkdownUpdate(document, markdown);
-    return;
-  }
-
-  updateDocumentContent(document, markdown);
-  markMilkdownSynchronized(document.id, markdown);
+  synchronizeDocumentFromMilkdownMarkdown(document, markdown, { updateUi: false });
 }
 
 function applyMilkdownMarkdownUpdate(document: DocumentState, markdown: string): void {
+  synchronizeDocumentFromMilkdownMarkdown(document, markdown, { updateUi: true });
+}
+
+function synchronizeDocumentFromMilkdownMarkdown(
+  document: DocumentState,
+  markdown: string,
+  options: {
+    updateUi: boolean;
+  }
+): void {
   const session = getMilkdownSession(document.id);
-  const syncDecision = resolveMarkdownSyncDecision({
+  const { decision, nextContent } = synchronizeMarkdownContent({
+    currentContent: document.content,
     hasPendingChanges: session?.hasPendingChanges ?? hasPendingMilkdownChanges(document.id),
     synchronizedSnapshot: session?.markdownSnapshot ?? document.content,
     serializedMarkdown: markdown,
     baselineBlockCount: document.sourceSnapshot.blocks.length,
     fidelityBlockLimit: MARKDOWN_SYNC_FIDELITY_BLOCK_LIMIT,
-    fidelityLengthLimit: MARKDOWN_SYNC_FIDELITY_LENGTH_LIMIT
+    fidelityLengthLimit: MARKDOWN_SYNC_FIDELITY_LENGTH_LIMIT,
+    preserveContent: (serializedMarkdown) => buildFidelityPreservedMarkdown(document, serializedMarkdown)
   });
 
-  if (syncDecision === 'skip') {
+  if (decision === 'skip') {
     return;
-  }
-
-  let nextContent = markdown;
-
-  if (syncDecision === 'preserve') {
-    nextContent = buildFidelityPreservedMarkdown(document, markdown);
   }
 
   markMilkdownSynchronized(document.id, nextContent);
@@ -3865,6 +3868,11 @@ function applyMilkdownMarkdownUpdate(document: DocumentState, markdown: string):
   }
 
   updateDocumentContent(document, nextContent);
+
+  if (!options.updateUi) {
+    return;
+  }
+
   renderDocumentHeader();
 
   if (sidebarMode === FILES_MODE) {
