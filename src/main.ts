@@ -55,6 +55,11 @@ import {
   getFindMatchStart
 } from './find-replace-state';
 import { extendInlineHtmlRemarkHandlers, madoInlineHtmlSupport } from './milkdown-inline-html';
+import { resolveMarkdownSyncDecision } from './milkdown-sync-state';
+import {
+  getErrorMessage,
+  resolveSaveFlowDecision
+} from './save-flow-state';
 import {
   createSourceHistoryState,
   recordSourceHistorySnapshot,
@@ -3208,13 +3213,6 @@ function resolveHeadingStyleAfterLevelChange(
   return 'atx';
 }
 
-function shouldUseFidelityPreservation(document: DocumentState, serializedMarkdown: string): boolean {
-  return (
-    document.sourceSnapshot.blocks.length <= MARKDOWN_SYNC_FIDELITY_BLOCK_LIMIT &&
-    serializedMarkdown.length <= MARKDOWN_SYNC_FIDELITY_LENGTH_LIMIT
-  );
-}
-
 function buildHeadingStylesForSnapshot(
   document: DocumentState,
   snapshot: MarkdownSourceSnapshot
@@ -3840,10 +3838,23 @@ function syncMilkdownSessionDocumentBeforeDestroy(session: MilkdownSession): voi
 }
 
 function applyMilkdownMarkdownUpdate(document: DocumentState, markdown: string): void {
-  const useFidelityPreservation = shouldUseFidelityPreservation(document, markdown);
+  const session = getMilkdownSession(document.id);
+  const syncDecision = resolveMarkdownSyncDecision({
+    hasPendingChanges: session?.hasPendingChanges ?? hasPendingMilkdownChanges(document.id),
+    synchronizedSnapshot: session?.markdownSnapshot ?? document.content,
+    serializedMarkdown: markdown,
+    baselineBlockCount: document.sourceSnapshot.blocks.length,
+    fidelityBlockLimit: MARKDOWN_SYNC_FIDELITY_BLOCK_LIMIT,
+    fidelityLengthLimit: MARKDOWN_SYNC_FIDELITY_LENGTH_LIMIT
+  });
+
+  if (syncDecision === 'skip') {
+    return;
+  }
+
   let nextContent = markdown;
 
-  if (useFidelityPreservation) {
+  if (syncDecision === 'preserve') {
     nextContent = buildFidelityPreservedMarkdown(document, markdown);
   }
 
@@ -4459,9 +4470,7 @@ async function closeDocument(
   }
 
   if (document.isDirty && !options.skipDirtyConfirm) {
-    const shouldDiscard = window.confirm(
-      '\u5f53\u524d\u6587\u4ef6\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539\uff0c\u786e\u5b9a\u5173\u95ed\u5e76\u4e22\u5f03\u8fd9\u4e9b\u5185\u5bb9\u5417\uff1f'
-    );
+    const shouldDiscard = await confirmDiscardDocument(document);
 
     if (!shouldDiscard) {
       return;
@@ -7769,17 +7778,25 @@ async function confirmDiscardUntitledSidebarDocument(documentId: string): Promis
     return;
   }
 
-  const shouldDiscard = await showDeleteConfirmDialog({
-    title: '\u5173\u95ed\u672a\u4fdd\u5b58\u6587\u6863',
-    description: `\u786e\u5b9a\u5173\u95ed\u201c${document.fileName}\u201d\u5e76\u4e22\u5f03\u672a\u4fdd\u5b58\u7684\u5185\u5bb9\u5417\uff1f`,
-    confirmText: '\u5173\u95ed'
-  });
+  const shouldDiscard = await confirmDiscardDocument(document);
 
   if (!shouldDiscard) {
     return;
   }
 
   await closeDocument(documentId, { skipDirtyConfirm: true });
+}
+
+async function confirmDiscardDocument(
+  document: Pick<DocumentState, 'fileName'>
+): Promise<boolean> {
+  const shouldDiscard = await showDeleteConfirmDialog({
+    title: '\u5173\u95ed\u672a\u4fdd\u5b58\u6587\u6863',
+    description: `\u786e\u5b9a\u5173\u95ed\u201c${document.fileName}\u201d\u5e76\u4e22\u5f03\u672a\u4fdd\u5b58\u7684\u5185\u5bb9\u5417\uff1f`,
+    confirmText: '\u5173\u95ed'
+  });
+
+  return shouldDiscard;
 }
 
 async function validateMarkdownSavePath(filePath: string): Promise<string | null> {
@@ -7890,6 +7907,10 @@ function closeDeleteConfirmDialog(result: boolean): void {
   if (resolver) {
     resolver(result);
   }
+
+  window.requestAnimationFrame(() => {
+    focusActiveCommandContext();
+  });
 }
 
 function showDeleteConfirmDialog(options: DeleteConfirmDialogOptions): Promise<boolean> {
@@ -7917,6 +7938,23 @@ async function saveDocumentToPath(document: DocumentState, filePath: string): Pr
     content: document.content,
     encoding: document.encoding
   });
+}
+
+async function syncSidebarAfterSavedDocument(
+  saved: Pick<OpenedDocument, 'fileName' | 'filePath' | 'directoryPath' | 'content'>,
+  options: {
+    previousFilePath?: string | null;
+    ensureCurrentDirectory?: boolean;
+  } = {}
+): Promise<void> {
+  if (syncCurrentDirectoryFileEntry(saved, options.previousFilePath ?? null)) {
+    requestFilesSidebarRefresh();
+    return;
+  }
+
+  if (options.ensureCurrentDirectory) {
+    await setCurrentDirectoryPath(saved.directoryPath);
+  }
 }
 
 function applySavedDocumentState(document: DocumentState, saved: OpenedDocument): void {
@@ -8035,22 +8073,17 @@ async function handleSaveRequest(): Promise<void> {
 
       const saved = await saveDocumentToPath(activeDocument, savePath);
       applySavedDocumentState(activeDocument, saved);
-      if (!syncCurrentDirectoryFileEntry(saved)) {
-        await setCurrentDirectoryPath(saved.directoryPath);
-      } else {
-        requestFilesSidebarRefresh();
-      }
+      await syncSidebarAfterSavedDocument(saved, { ensureCurrentDirectory: true });
       requestRender({ editor: true });
       return;
     }
 
     const saved = await saveDocumentToPath(activeDocument, activeDocument.filePath);
     applySavedDocumentState(activeDocument, saved);
-    syncCurrentDirectoryFileEntry(saved);
+    await syncSidebarAfterSavedDocument(saved);
     renderDocumentHeader();
-    requestFilesSidebarRefresh();
-  } catch {
-    showHeaderNotice('\u4fdd\u5b58\u6587\u4ef6\u5931\u8d25\u3002', true);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '\u4fdd\u5b58\u6587\u4ef6\u5931\u8d25\u3002'), true);
   }
 }
 
@@ -8082,24 +8115,32 @@ async function handleSaveAsRequest(): Promise<void> {
 
   try {
     const saved = await saveDocumentToPath(activeDocument, savePath);
+    const saveFlow = resolveSaveFlowDecision({
+      operation: 'saveAs',
+      isUntitled: activeDocument.isUntitled,
+      activeFilePath: activeDocument.filePath,
+      currentDirectoryPath,
+      savedDirectoryPath: saved.directoryPath
+    });
 
-    if (activeDocument.isUntitled || !activeDocument.filePath) {
+    if (saveFlow.adoptsSavedDocument) {
       applySavedDocumentState(activeDocument, saved);
-      if (!syncCurrentDirectoryFileEntry(saved)) {
-        await setCurrentDirectoryPath(saved.directoryPath);
-      } else {
-        requestFilesSidebarRefresh();
-      }
+      await syncSidebarAfterSavedDocument(saved, { ensureCurrentDirectory: true });
       requestRender({ editor: true });
       return;
     }
 
     markMilkdownSynchronized(activeDocument.id, activeDocument.content);
     upsertRecentFromDocumentPayload(saved, activeDocument.content, Date.now());
+
+    if (saveFlow.syncsSavedFileIntoCurrentDirectory) {
+      await syncSidebarAfterSavedDocument(saved);
+    }
+
     showHeaderNotice('\u5df2\u53e6\u5b58\u4e3a\u65b0\u6587\u4ef6\uff0c\u5f53\u524d\u4ecd\u4fdd\u6301\u539f\u6587\u6863\u3002');
     renderDocumentHeader();
-  } catch {
-    showHeaderNotice('\u53e6\u5b58\u4e3a\u5931\u8d25\u3002', true);
+  } catch (error) {
+    showHeaderNotice(getErrorMessage(error, '\u53e6\u5b58\u4e3a\u5931\u8d25\u3002'), true);
   }
 }
 
@@ -8414,9 +8455,6 @@ function performEditorSelectAll(): void {
     view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
     return true;
   });
-}
-function getErrorMessage(error: unknown, fallback: string): string {
-  return typeof error === 'string' && error.length > 0 ? error : fallback;
 }
 async function openDocumentFromPath(
   filePath: string,
