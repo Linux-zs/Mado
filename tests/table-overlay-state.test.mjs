@@ -2,7 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  TABLE_ALIGNMENT_BUTTON_LABELS,
+  TABLE_PROPERTIES_ALIGNMENT_LABEL,
+  TABLE_PROPERTIES_APPLY_LABEL,
+  TABLE_PROPERTIES_BUTTON_LABEL,
+  TABLE_PROPERTIES_SIZE_LABEL,
   normalizeTableColumnAlignment,
+  resolveTablePropertiesDraft,
   resolveTableResizePlan
 } from '../.test-dist/src/table-overlay-state.js';
 
@@ -68,4 +74,65 @@ test('normalizeTableColumnAlignment accepts only left center and right', () => {
   assert.equal(normalizeTableColumnAlignment('center'), 'center');
   assert.equal(normalizeTableColumnAlignment('right'), 'right');
   assert.equal(normalizeTableColumnAlignment(' justify '), null);
+});
+
+test('resolveTablePropertiesDraft preserves draft while the same table properties panel stays open', () => {
+  assert.deepEqual(
+    resolveTablePropertiesDraft({
+      previousDraft: { rows: 7, cols: 5 },
+      previousTableStart: 24,
+      nextTableStart: 24,
+      actualRows: 3,
+      actualCols: 3,
+      preserveExisting: true
+    }),
+    {
+      rows: 7,
+      cols: 5
+    }
+  );
+});
+
+test('resolveTablePropertiesDraft resets to actual size when the table changes or preservation is disabled', () => {
+  assert.deepEqual(
+    resolveTablePropertiesDraft({
+      previousDraft: { rows: 7, cols: 5 },
+      previousTableStart: 24,
+      nextTableStart: 48,
+      actualRows: 4,
+      actualCols: 6,
+      preserveExisting: true
+    }),
+    {
+      rows: 4,
+      cols: 6
+    }
+  );
+
+  assert.deepEqual(
+    resolveTablePropertiesDraft({
+      previousDraft: { rows: 7, cols: 5 },
+      previousTableStart: 24,
+      nextTableStart: 24,
+      actualRows: 4,
+      actualCols: 6,
+      preserveExisting: false
+    }),
+    {
+      rows: 4,
+      cols: 6
+    }
+  );
+});
+
+test('table property labels stay in Chinese', () => {
+  assert.equal(TABLE_PROPERTIES_BUTTON_LABEL, '\u8868\u683c\u5c5e\u6027');
+  assert.equal(TABLE_PROPERTIES_SIZE_LABEL, '\u8868\u683c\u5927\u5c0f');
+  assert.equal(TABLE_PROPERTIES_APPLY_LABEL, '\u5e94\u7528');
+  assert.equal(TABLE_PROPERTIES_ALIGNMENT_LABEL, '\u5bf9\u9f50\u65b9\u5f0f');
+  assert.deepEqual(TABLE_ALIGNMENT_BUTTON_LABELS, {
+    left: '\u5de6\u5bf9\u9f50',
+    center: '\u5c45\u4e2d',
+    right: '\u53f3\u5bf9\u9f50'
+  });
 });

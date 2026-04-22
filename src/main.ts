@@ -82,7 +82,13 @@ import {
   resolveSaveFlowDecision
 } from './save-flow-state';
 import {
+  TABLE_ALIGNMENT_BUTTON_LABELS,
+  TABLE_PROPERTIES_ALIGNMENT_LABEL,
+  TABLE_PROPERTIES_APPLY_LABEL,
+  TABLE_PROPERTIES_BUTTON_LABEL,
+  TABLE_PROPERTIES_SIZE_LABEL,
   normalizeTableColumnAlignment,
+  resolveTablePropertiesDraft,
   resolveTableResizePlan,
   type TableColumnAlignment
 } from './table-overlay-state';
@@ -323,6 +329,16 @@ type ActiveTableToolState = {
   colCount: number;
   currentColumn: number;
   currentAlignment: TableColumnAlignment | null;
+};
+
+type TableToolPropertiesControls = {
+  sizeLabel: HTMLDivElement;
+  gridCells: Array<{ row: number; col: number; element: HTMLButtonElement }>;
+  rowsInput: HTMLInputElement;
+  colsInput: HTMLInputElement;
+  applyButton: HTMLButtonElement;
+  alignmentLabel: HTMLDivElement;
+  alignmentButtons: Record<TableColumnAlignment, HTMLButtonElement>;
 };
 
 type RenameDialogOptions = {
@@ -648,6 +664,7 @@ let tableToolProperties: HTMLDivElement | null = null;
 let tableToolMenuOpen = false;
 let tableToolPropertiesOpen = false;
 let tablePropertiesDraft: { rows: number; cols: number } | null = null;
+const tableToolPropertiesControls = new WeakMap<HTMLDivElement, TableToolPropertiesControls>();
 let sidebarWidth = loadWorkspaceSidebarWidth();
 let workspaceResizeActive = false;
 let workspaceResizePointerId: number | null = null;
@@ -5802,37 +5819,37 @@ function updateTablePropertiesDraft(nextDraft: { rows?: number; cols?: number })
   }
 }
 
-function renderTableToolPropertiesContent(): void {
-  if (!tableToolProperties || !activeTableToolState) {
-    return;
+function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null {
+  if (!tableToolProperties) {
+    return null;
   }
 
-  const draft = tablePropertiesDraft ?? {
-    rows: activeTableToolState.rowCount,
-    cols: activeTableToolState.colCount
-  };
+  const existing = tableToolPropertiesControls.get(tableToolProperties);
+
+  if (existing) {
+    return existing;
+  }
+
+  const sizeLabel = document.createElement('div');
+  sizeLabel.className = 'table-properties-caption';
+
   const grid = document.createElement('div');
   grid.className = 'table-size-grid';
+  const gridCells: Array<{ row: number; col: number; element: HTMLButtonElement }> = [];
 
   for (let row = 2; row <= 9; row += 1) {
     for (let col = 1; col <= 8; col += 1) {
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'table-size-grid-cell';
-      if (row <= draft.rows && col <= draft.cols) {
-        cell.classList.add('is-selected');
-      }
       cell.setAttribute('aria-label', `${row} x ${col}`);
       cell.addEventListener('click', () => {
         updateTablePropertiesDraft({ rows: row, cols: col });
       });
+      gridCells.push({ row, col, element: cell });
       grid.append(cell);
     }
   }
-
-  const sizeLabel = document.createElement('div');
-  sizeLabel.className = 'table-properties-caption';
-  sizeLabel.textContent = 'Size';
 
   const sizeControls = document.createElement('div');
   sizeControls.className = 'table-properties-size-controls';
@@ -5841,7 +5858,6 @@ function renderTableToolPropertiesContent(): void {
   rowsInput.className = 'table-properties-number';
   rowsInput.type = 'number';
   rowsInput.min = '2';
-  rowsInput.value = String(draft.rows);
   rowsInput.addEventListener('change', () => {
     updateTablePropertiesDraft({ rows: Number(rowsInput.value || 2) });
   });
@@ -5854,44 +5870,97 @@ function renderTableToolPropertiesContent(): void {
   colsInput.className = 'table-properties-number';
   colsInput.type = 'number';
   colsInput.min = '1';
-  colsInput.value = String(draft.cols);
   colsInput.addEventListener('change', () => {
     updateTablePropertiesDraft({ cols: Number(colsInput.value || 1) });
   });
 
-  const applySizeButton = document.createElement('button');
-  applySizeButton.type = 'button';
-  applySizeButton.className = 'table-properties-apply';
-  applySizeButton.textContent = 'Apply';
-  applySizeButton.addEventListener('click', () => {
+  const applyButton = document.createElement('button');
+  applyButton.type = 'button';
+  applyButton.className = 'table-properties-apply';
+  applyButton.addEventListener('click', () => {
+    const nextRowsValue = rowsInput.value || String(tablePropertiesDraft?.rows ?? activeTableToolState?.rowCount ?? 2);
+    const nextColsValue = colsInput.value || String(tablePropertiesDraft?.cols ?? activeTableToolState?.colCount ?? 1);
+    const draft = {
+      rows: Math.max(2, Math.floor(Number(nextRowsValue))),
+      cols: Math.max(1, Math.floor(Number(nextColsValue)))
+    };
+    tablePropertiesDraft = draft;
     applyActiveTableResize(draft.rows, draft.cols);
   });
 
-  sizeControls.append(rowsInput, separator, colsInput, applySizeButton);
+  sizeControls.append(rowsInput, separator, colsInput, applyButton);
 
   const alignmentLabel = document.createElement('div');
   alignmentLabel.className = 'table-properties-caption';
-  alignmentLabel.textContent = 'Column Align';
 
   const alignmentButtons = document.createElement('div');
   alignmentButtons.className = 'table-properties-align-buttons';
+  const alignmentButtonMap = {} as Record<TableColumnAlignment, HTMLButtonElement>;
 
   for (const alignment of ['left', 'center', 'right'] as const) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'table-align-button';
-    if (activeTableToolState.currentAlignment === alignment) {
-      button.classList.add('is-active');
-    }
-    button.textContent = alignment[0]!.toUpperCase();
-    button.setAttribute('aria-label', alignment);
+    button.textContent = TABLE_ALIGNMENT_BUTTON_LABELS[alignment];
+    button.setAttribute('aria-label', TABLE_ALIGNMENT_BUTTON_LABELS[alignment]);
     button.addEventListener('click', () => {
       applyActiveTableColumnAlignment(alignment);
     });
+    alignmentButtonMap[alignment] = button;
     alignmentButtons.append(button);
   }
 
   tableToolProperties.replaceChildren(sizeLabel, grid, sizeControls, alignmentLabel, alignmentButtons);
+
+  const controls: TableToolPropertiesControls = {
+    sizeLabel,
+    gridCells,
+    rowsInput,
+    colsInput,
+    applyButton,
+    alignmentLabel,
+    alignmentButtons: alignmentButtonMap
+  };
+
+  tableToolPropertiesControls.set(tableToolProperties, controls);
+  return controls;
+}
+
+function renderTableToolPropertiesContent(): void {
+  if (!tableToolProperties || !activeTableToolState) {
+    return;
+  }
+
+  const controls = ensureTableToolPropertiesControls();
+
+  if (!controls) {
+    return;
+  }
+
+  const draft = tablePropertiesDraft ?? {
+    rows: activeTableToolState.rowCount,
+    cols: activeTableToolState.colCount
+  };
+  controls.sizeLabel.textContent = TABLE_PROPERTIES_SIZE_LABEL;
+  if (document.activeElement !== controls.rowsInput) {
+    controls.rowsInput.value = String(draft.rows);
+  }
+  if (document.activeElement !== controls.colsInput) {
+    controls.colsInput.value = String(draft.cols);
+  }
+  controls.applyButton.textContent = TABLE_PROPERTIES_APPLY_LABEL;
+  controls.alignmentLabel.textContent = TABLE_PROPERTIES_ALIGNMENT_LABEL;
+
+  for (const { row, col, element } of controls.gridCells) {
+    element.classList.toggle('is-selected', row <= draft.rows && col <= draft.cols);
+  }
+
+  for (const alignment of ['left', 'center', 'right'] as const) {
+    const button = controls.alignmentButtons[alignment];
+    button.classList.toggle('is-active', activeTableToolState.currentAlignment === alignment);
+    button.textContent = TABLE_ALIGNMENT_BUTTON_LABELS[alignment];
+    button.setAttribute('aria-label', TABLE_ALIGNMENT_BUTTON_LABELS[alignment]);
+  }
 }
 
 function setTableToolMenuOpen(nextOpen: boolean): void {
@@ -5918,12 +5987,18 @@ function setTableToolPropertiesOpen(nextOpen: boolean): void {
   if (nextOpen) {
     tableToolMenuOpen = false;
     if (activeTableToolState) {
-      tablePropertiesDraft = {
-        rows: activeTableToolState.rowCount,
-        cols: activeTableToolState.colCount
-      };
+      tablePropertiesDraft = resolveTablePropertiesDraft({
+        previousDraft: tablePropertiesDraft,
+        previousTableStart: activeTableToolState.tableStart,
+        nextTableStart: activeTableToolState.tableStart,
+        actualRows: activeTableToolState.rowCount,
+        actualCols: activeTableToolState.colCount,
+        preserveExisting: false
+      });
       renderTableToolPropertiesContent();
     }
+  } else {
+    tablePropertiesDraft = null;
   }
 
   if (!tableToolOverlay || !tableToolMenuButton || !tableToolMenu || !tableToolPropertiesButton || !tableToolProperties) {
@@ -6016,13 +6091,18 @@ function renderTableToolOverlay(documentId: string): void {
 
   const view = milkdownEditor.action((ctx) => ctx.get(editorViewCtx));
   const rect = getCurrentTableRect(view);
+  const fallbackRect =
+    !rect && tableToolPropertiesOpen && activeTableToolState?.documentId === documentId
+      ? getTableRectAtStart(view.state.doc, activeTableToolState.tableStart)
+      : null;
+  const activeRect = rect ?? fallbackRect;
 
-  if (!rect) {
+  if (!activeRect) {
     clearTableToolOverlay();
     return;
   }
 
-  const tablePos = rect.tableStart - 1;
+  const tablePos = activeRect.tableStart - 1;
   const tableElement = view.nodeDOM(tablePos);
 
   if (!(tableElement instanceof HTMLElement)) {
@@ -6033,23 +6113,32 @@ function renderTableToolOverlay(documentId: string): void {
   const nextState: ActiveTableToolState = {
     documentId,
     tablePos,
-    tableStart: rect.tableStart,
-    rowCount: rect.map.height,
-    colCount: rect.map.width,
-    currentColumn: rect.left,
+    tableStart: activeRect.tableStart,
+    rowCount: activeRect.map.height,
+    colCount: activeRect.map.width,
+    currentColumn: Math.min(
+      activeRect.map.width - 1,
+      Math.max(0, rect?.left ?? activeTableToolState?.currentColumn ?? 0)
+    ),
     currentAlignment: normalizeTableColumnAlignment(
-      rect.table.firstChild?.child(rect.left)?.attrs.alignment ?? null
+      activeRect.table.firstChild?.child(
+        Math.min(activeRect.map.width - 1, Math.max(0, rect?.left ?? activeTableToolState?.currentColumn ?? 0))
+      )?.attrs.alignment ?? null
     )
   };
 
   if (!activeTableToolState || activeTableToolState.tableStart !== nextState.tableStart) {
     tableToolMenuOpen = false;
-    tableToolPropertiesOpen = false;
-    tablePropertiesDraft = {
-      rows: nextState.rowCount,
-      cols: nextState.colCount
-    };
   }
+
+  tablePropertiesDraft = resolveTablePropertiesDraft({
+    previousDraft: tablePropertiesDraft,
+    previousTableStart: activeTableToolState?.tableStart ?? null,
+    nextTableStart: nextState.tableStart,
+    actualRows: nextState.rowCount,
+    actualCols: nextState.colCount,
+    preserveExisting: tableToolPropertiesOpen
+  });
 
   activeTableToolState = nextState;
 
@@ -7246,8 +7335,8 @@ function createTableToolOverlay(
   const propertiesButton = document.createElement('button');
   propertiesButton.type = 'button';
   propertiesButton.className = 'table-tool-button';
-  propertiesButton.textContent = 'grid';
-  propertiesButton.setAttribute('aria-label', 'Open table properties');
+  propertiesButton.textContent = TABLE_PROPERTIES_BUTTON_LABEL;
+  propertiesButton.setAttribute('aria-label', TABLE_PROPERTIES_BUTTON_LABEL);
   propertiesButton.setAttribute('aria-expanded', 'false');
   propertiesButton.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
