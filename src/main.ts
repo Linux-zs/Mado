@@ -65,6 +65,13 @@ import {
   type AppearanceTheme
 } from './appearance-state';
 import {
+  createDefaultEditorScalePercent,
+  normalizeEditorScalePercent,
+  resetEditorScalePercent,
+  shouldHandleEditorScaleWheel,
+  stepEditorScalePercent
+} from './editor-scale-state';
+import {
   DEFAULT_CODE_BLOCK_LANGUAGE_BADGE_TEXT,
   getCodeBlockLanguageBadgeText,
   normalizeCodeBlockLanguageInput
@@ -500,6 +507,7 @@ const CURRENT_DIRECTORY_STORAGE_KEY = 'tias.current-directory.v1';
 const FILE_TREE_EXPANSION_STORAGE_KEY = 'tias.file-tree-expansion.v1';
 const FILES_SIDEBAR_SEARCH_VISIBLE_STORAGE_KEY = 'tias.files-sidebar-search-visible.v1';
 const APPEARANCE_SETTINGS_STORAGE_KEY = 'tias.appearance-settings.v1';
+const EDITOR_SCALE_STORAGE_KEY = 'tias.editor-scale-percent.v1';
 const UNTITLED_FILE_NAME = '\u672a\u547d\u540d.md';
 const FILES_MODE = 'files';
 const OUTLINE_MODE = 'outline';
@@ -635,6 +643,7 @@ let recentFilesMenuSyncInFlight = false;
 let recentFilesStorageErrorShown = false;
 let recentFilesMenuSyncErrorShown = false;
 let appearanceSettings = loadAppearanceSettings();
+let editorScalePercent = loadEditorScalePercent();
 let currentDirectoryPath = loadCurrentDirectoryPath();
 let directoryFiles: DirectoryFileEntry[] = [];
 let directoryFolders: DirectoryFolderEntry[] = [];
@@ -887,6 +896,9 @@ workspaceResizeHandle.setAttribute('aria-label', '\u8c03\u6574\u4fa7\u680f\u5bbd
 const editorPanel = document.createElement('section');
 editorPanel.className = 'editor-panel';
 
+const editorViewport = document.createElement('div');
+editorViewport.className = 'editor-viewport';
+
 const header = document.createElement('header');
 header.className = 'viewer-header';
 
@@ -1091,12 +1103,14 @@ contextSubmenuPanel.setAttribute('role', 'menu');
 contextMenuLayer.append(contextMenuPanel, contextSubmenuPanel);
 
 header.append(fileName, fileHint);
-editorPanel.append(header, findReplaceBar, content, statusBar);
+editorViewport.append(header, findReplaceBar, content);
+editorPanel.append(editorViewport, statusBar);
 frame.append(sidebar, workspaceResizeHandle, editorPanel);
 shell.append(frame, contextMenuLayer, renameOverlay, deleteConfirmOverlay);
 app.replaceChildren(shell);
 
 applyAppearanceSettings();
+applyEditorScalePercent();
 applySidebarWidth(sidebarWidth);
 applySidebarCollapsedState();
 syncAppearanceMenuState();
@@ -1374,6 +1388,8 @@ window.addEventListener(
   },
   true
 );
+
+editorViewport.addEventListener('wheel', handleEditorScaleWheel, { passive: false });
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
@@ -2670,6 +2686,57 @@ function loadAppearanceSettings(): AppearanceSettings {
   } catch {
     return createDefaultAppearanceSettings();
   }
+}
+
+function loadEditorScalePercent(): number {
+  try {
+    const stored = window.localStorage.getItem(EDITOR_SCALE_STORAGE_KEY);
+
+    if (!stored) {
+      return createDefaultEditorScalePercent();
+    }
+
+    return normalizeEditorScalePercent(Number(stored));
+  } catch {
+    return createDefaultEditorScalePercent();
+  }
+}
+
+function persistEditorScalePercent(): void {
+  try {
+    window.localStorage.setItem(EDITOR_SCALE_STORAGE_KEY, String(editorScalePercent));
+  } catch {
+    // Keep the in-memory editor scale even if persistence fails.
+  }
+}
+
+function refreshEditorScaleOverlays(): void {
+  if (editorViewMode !== 'rendered' || !activeDocumentId) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    if (editorViewMode === 'rendered' && activeDocumentId) {
+      renderActiveMilkdownOverlays(activeDocumentId);
+    }
+  });
+}
+
+function applyEditorScalePercent(): void {
+  editorViewport.style.setProperty('--editor-scale', String(editorScalePercent / 100));
+  refreshEditorScaleOverlays();
+}
+
+function setEditorScalePercent(nextPercent: number): void {
+  const normalized = normalizeEditorScalePercent(nextPercent);
+
+  if (normalized === editorScalePercent) {
+    return;
+  }
+
+  editorScalePercent = normalized;
+  applyEditorScalePercent();
+  persistEditorScalePercent();
 }
 
 function persistAppearanceSettings(): void {
@@ -7044,11 +7111,56 @@ function getShortcutTargetKind(target: EventTarget | null): ShortcutTargetKind {
   return 'other';
 }
 
+function isTargetWithinEditorViewport(target: EventTarget | null): boolean {
+  const element = getShortcutEventTargetElement(target);
+  return Boolean(element && editorViewport.contains(element));
+}
+
 function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
   return shouldBlockGlobalShortcutTarget({
     renameDialogOpen: !renameOverlay.classList.contains('is-hidden'),
     targetKind: getShortcutTargetKind(target)
   });
+}
+
+function isEditorScaleResetShortcut(event: KeyboardEvent): boolean {
+  if (event.metaKey || !event.ctrlKey || event.shiftKey || event.altKey) {
+    return false;
+  }
+
+  return event.code === 'Digit0' || event.code === 'Numpad0' || normalizeShortcutEventKey(event) === '0';
+}
+
+function handleEditorScaleWheel(event: WheelEvent): void {
+  if (
+    !shouldHandleEditorScaleWheel({
+      ctrlKey: event.ctrlKey,
+      targetWithinEditor: isTargetWithinEditorViewport(event.target)
+    })
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  setEditorScalePercent(stepEditorScalePercent(editorScalePercent, event.deltaY));
+}
+
+function handleEditorScaleResetShortcut(event: KeyboardEvent): boolean {
+  if (
+    event.defaultPrevented ||
+    event.repeat ||
+    event.isComposing ||
+    !isEditorScaleResetShortcut(event) ||
+    !isTargetWithinEditorViewport(event.target)
+  ) {
+    return false;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  setEditorScalePercent(resetEditorScalePercent());
+  return true;
 }
 
 function normalizeShortcutEventKey(event: KeyboardEvent): string {
@@ -7432,6 +7544,10 @@ async function dispatchAppCommand(
 }
 
 function handleGlobalFileShortcut(event: KeyboardEvent): void {
+  if (handleEditorScaleResetShortcut(event)) {
+    return;
+  }
+
   if (!canHandleFileShortcutEvent(event)) {
     return;
   }

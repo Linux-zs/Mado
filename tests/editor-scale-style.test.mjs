@@ -24,12 +24,12 @@ function getRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
-test('editor panel uses 90 percent zoom with layout compensation', () => {
+test('editor viewport uses runtime zoom with layout compensation', () => {
   const rootRule = getRuleBody(':root');
-  const editorPanelRule = getRuleBody('.editor-panel');
+  const editorViewportRule = getRuleBody('.editor-viewport');
 
-  assert.match(rootRule, /--editor-scale:\s*0\.9;/);
-  assert.match(editorPanelRule, /zoom:\s*var\(--editor-scale\);/);
-  assert.match(editorPanelRule, /width:\s*calc\(100%\s*\/\s*var\(--editor-scale\)\);/);
-  assert.match(editorPanelRule, /height:\s*calc\(100%\s*\/\s*var\(--editor-scale\)\);/);
+  assert.match(rootRule, /--editor-scale:\s*1;/);
+  assert.match(editorViewportRule, /zoom:\s*var\(--editor-scale\);/);
+  assert.match(editorViewportRule, /width:\s*calc\(100%\s*\/\s*var\(--editor-scale\)\);/);
+  assert.match(editorViewportRule, /height:\s*calc\(100%\s*\/\s*var\(--editor-scale\)\);/);
 });
