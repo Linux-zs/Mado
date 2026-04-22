@@ -33,14 +33,19 @@ import {
 } from '@milkdown/preset-gfm';
 import { Plugin, PluginKey, Selection, TextSelection } from '@milkdown/prose/state';
 import {
+  addColumn,
+  addRow,
   deleteColumn,
   deleteRow,
   deleteTable,
   isInTable,
   moveTableColumn,
   moveTableRow,
+  removeColumn,
+  removeRow,
   selectedRect
 } from '@milkdown/prose/tables';
+import { TableMap } from '@milkdown/prose/tables';
 import { history as proseHistory, redo, redoDepth, undo, undoDepth } from '@milkdown/prose/history';
 import type { Node as ProseMirrorNode } from '@milkdown/prose/model';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
@@ -50,6 +55,11 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
+import {
+  DEFAULT_CODE_BLOCK_LANGUAGE_BADGE_TEXT,
+  getCodeBlockLanguageBadgeText,
+  normalizeCodeBlockLanguageInput
+} from './code-block-language-state';
 import {
   createDeleteConfirmDialogResult,
   createDeleteConfirmRestoreTargetFromContext,
@@ -71,6 +81,11 @@ import {
   getErrorMessage,
   resolveSaveFlowDecision
 } from './save-flow-state';
+import {
+  normalizeTableColumnAlignment,
+  resolveTableResizePlan,
+  type TableColumnAlignment
+} from './table-overlay-state';
 import {
   resolveRecentFilesErrorReport,
   resolveRecentFilesErrorReset
@@ -223,6 +238,14 @@ type MilkdownSession = {
   headingMarkerMenu: HTMLDivElement | null;
   headingMarkerMenuOpen: boolean;
   activeHeadingMarkerState: ActiveHeadingMarkerState | null;
+  tableToolOverlay: HTMLDivElement | null;
+  tableToolMenuButton: HTMLButtonElement | null;
+  tableToolPropertiesButton: HTMLButtonElement | null;
+  tableToolMenu: HTMLDivElement | null;
+  tableToolProperties: HTMLDivElement | null;
+  tableToolMenuOpen: boolean;
+  tableToolPropertiesOpen: boolean;
+  activeTableToolState: ActiveTableToolState | null;
   lastUsedAt: number;
 };
 
@@ -285,6 +308,22 @@ type ActiveHeadingMarkerState =
       to: number;
       inlinePreset: InlineFormatPreset | null;
     };
+
+type ActiveCodeBlockLanguageEditState = {
+  documentId: string;
+  pos: number;
+  draft: string;
+};
+
+type ActiveTableToolState = {
+  documentId: string;
+  tablePos: number;
+  tableStart: number;
+  rowCount: number;
+  colCount: number;
+  currentColumn: number;
+  currentAlignment: TableColumnAlignment | null;
+};
 
 type RenameDialogOptions = {
   title: string;
@@ -599,6 +638,16 @@ let headingMarkerOverlay: HTMLDivElement | null = null;
 let headingMarkerBadge: HTMLButtonElement | null = null;
 let headingMarkerMenu: HTMLDivElement | null = null;
 let headingMarkerMenuOpen = false;
+let activeCodeBlockLanguageEditState: ActiveCodeBlockLanguageEditState | null = null;
+let activeTableToolState: ActiveTableToolState | null = null;
+let tableToolOverlay: HTMLDivElement | null = null;
+let tableToolMenuButton: HTMLButtonElement | null = null;
+let tableToolPropertiesButton: HTMLButtonElement | null = null;
+let tableToolMenu: HTMLDivElement | null = null;
+let tableToolProperties: HTMLDivElement | null = null;
+let tableToolMenuOpen = false;
+let tableToolPropertiesOpen = false;
+let tablePropertiesDraft: { rows: number; cols: number } | null = null;
 let sidebarWidth = loadWorkspaceSidebarWidth();
 let workspaceResizeActive = false;
 let workspaceResizePointerId: number | null = null;
@@ -661,63 +710,6 @@ const HEADING_TARGET_HIGHLIGHT_MS = 900;
 const EDITOR_SCROLL_REVEAL_OFFSET = 28;
 const reducedMotionMediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 const codeBlockHighlightParser = new DOMParser();
-const CODE_BLOCK_LANGUAGE_ALIASES: Record<string, string> = {
-  shell: 'bash',
-  sh: 'bash',
-  zsh: 'bash',
-  bash: 'bash',
-  console: 'bash',
-  shellsession: 'bash',
-  powershell: 'powershell',
-  ps1: 'powershell',
-  python: 'python',
-  py: 'python',
-  sql: 'sql',
-  javascript: 'javascript',
-  js: 'javascript',
-  jsx: 'javascript',
-  typescript: 'typescript',
-  ts: 'typescript',
-  tsx: 'typescript',
-  json: 'json',
-  yaml: 'yaml',
-  yml: 'yaml',
-  toml: 'ini',
-  ini: 'ini',
-  docker: 'dockerfile',
-  dockerfile: 'dockerfile',
-  html: 'xml',
-  htm: 'xml',
-  xml: 'xml',
-  svg: 'xml',
-  css: 'css',
-  scss: 'scss',
-  less: 'less',
-  markdown: 'markdown',
-  md: 'markdown',
-  rust: 'rust',
-  rs: 'rust',
-  go: 'go',
-  java: 'java',
-  kotlin: 'kotlin',
-  kt: 'kotlin',
-  swift: 'swift',
-  csharp: 'csharp',
-  'c#': 'csharp',
-  cpp: 'cpp',
-  'c++': 'cpp',
-  c: 'c',
-  php: 'php',
-  ruby: 'ruby',
-  rb: 'ruby',
-  perl: 'perl',
-  lua: 'lua',
-  nginx: 'nginx',
-  diff: 'diff',
-  plaintext: 'plaintext',
-  text: 'plaintext',
-  txt: 'plaintext'
-};
 const CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS: Record<string, HighlightLanguageLoader> = {
   bash: () => import('highlight.js/lib/languages/bash'),
   powershell: () => import('highlight.js/lib/languages/powershell'),
@@ -818,12 +810,12 @@ filesSidebarSearchBar.className = 'sidebar-search';
 const filesSidebarSearchInput = document.createElement('input');
 filesSidebarSearchInput.className = 'sidebar-search-input';
 filesSidebarSearchInput.type = 'text';
-filesSidebarSearchInput.placeholder = '鎼滅储鏂囦欢';
+filesSidebarSearchInput.placeholder = '\u641c\u7d22\u5f53\u524d\u76ee\u5f55';
 filesSidebarSearchInput.spellcheck = false;
 const filesSidebarSearchClose = document.createElement('button');
 filesSidebarSearchClose.type = 'button';
 filesSidebarSearchClose.className = 'sidebar-search-close';
-filesSidebarSearchClose.textContent = '鍏抽棴';
+filesSidebarSearchClose.textContent = '\u5173\u95ed';
 filesSidebarSearchBar.append(filesSidebarSearchInput, filesSidebarSearchClose);
 const filesSidebarNotice = document.createElement('p');
 filesSidebarNotice.className = 'sidebar-empty';
@@ -1038,7 +1030,7 @@ deleteConfirmActions.className = 'modal-actions';
 const deleteConfirmCancel = document.createElement('button');
 deleteConfirmCancel.type = 'button';
 deleteConfirmCancel.className = 'modal-button is-secondary';
-deleteConfirmCancel.textContent = '鍙栨秷';
+deleteConfirmCancel.textContent = '\u53d6\u6d88';
 
 const deleteConfirmSubmit = document.createElement('button');
 deleteConfirmSubmit.type = 'button';
@@ -1322,6 +1314,10 @@ workspaceResizeHandle.addEventListener('lostpointercapture', () => {
 window.addEventListener('resize', () => {
   clampSidebarWidthToWorkspace();
   closeContextMenu();
+
+  if (editorViewMode === 'rendered' && activeDocumentId) {
+    renderActiveMilkdownOverlays(activeDocumentId);
+  }
 });
 
 window.addEventListener(
@@ -1342,6 +1338,17 @@ window.addEventListener('keydown', (event) => {
       return;
     }
 
+    if (tableToolMenuOpen) {
+      closeTableToolMenu();
+      event.stopPropagation();
+      return;
+    }
+
+    if (tableToolPropertiesOpen) {
+      closeTableToolProperties();
+      event.stopPropagation();
+      return;
+    }
   }
 });
 
@@ -1356,6 +1363,7 @@ window.addEventListener(
 );
 
 window.addEventListener('pointerdown', handleHeadingMarkerWindowPointerDown, true);
+window.addEventListener('pointerdown', handleTableToolWindowPointerDown, true);
 
 function nextDocumentId(): string {
   documentSequence += 1;
@@ -3908,6 +3916,14 @@ function persistActiveMilkdownSessionState(): void {
   session.headingMarkerMenu = headingMarkerMenu;
   session.headingMarkerMenuOpen = headingMarkerMenuOpen;
   session.activeHeadingMarkerState = activeHeadingMarkerState;
+  session.tableToolOverlay = tableToolOverlay;
+  session.tableToolMenuButton = tableToolMenuButton;
+  session.tableToolPropertiesButton = tableToolPropertiesButton;
+  session.tableToolMenu = tableToolMenu;
+  session.tableToolProperties = tableToolProperties;
+  session.tableToolMenuOpen = tableToolMenuOpen;
+  session.tableToolPropertiesOpen = tableToolPropertiesOpen;
+  session.activeTableToolState = activeTableToolState;
 }
 
 function bindMilkdownSession(session: MilkdownSession): void {
@@ -3922,6 +3938,14 @@ function bindMilkdownSession(session: MilkdownSession): void {
   headingMarkerMenu = session.headingMarkerMenu;
   headingMarkerMenuOpen = session.headingMarkerMenuOpen;
   activeHeadingMarkerState = session.activeHeadingMarkerState;
+  tableToolOverlay = session.tableToolOverlay;
+  tableToolMenuButton = session.tableToolMenuButton;
+  tableToolPropertiesButton = session.tableToolPropertiesButton;
+  tableToolMenu = session.tableToolMenu;
+  tableToolProperties = session.tableToolProperties;
+  tableToolMenuOpen = session.tableToolMenuOpen;
+  tableToolPropertiesOpen = session.tableToolPropertiesOpen;
+  activeTableToolState = session.activeTableToolState;
   session.lastUsedAt = Date.now();
 }
 
@@ -3937,6 +3961,15 @@ function clearMilkdownBinding(): void {
   headingMarkerMenu = null;
   headingMarkerMenuOpen = false;
   activeHeadingMarkerState = null;
+  tableToolOverlay = null;
+  tableToolMenuButton = null;
+  tableToolPropertiesButton = null;
+  tableToolMenu = null;
+  tableToolProperties = null;
+  tableToolMenuOpen = false;
+  tableToolPropertiesOpen = false;
+  activeTableToolState = null;
+  tablePropertiesDraft = null;
 }
 
 function restoreMilkdownSessionScroll(session: MilkdownSession): void {
@@ -5720,6 +5753,319 @@ function renderHeadingMarkerOverlay(documentId: string): void {
   setHeadingMarkerMenuOpen(headingMarkerMenuOpen);
 }
 
+function createTableToolMenuActionButton(item: Exclude<ContextMenuItem, { kind: 'separator' }>): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `table-tool-menu-button${item.danger ? ' is-danger' : ''}`;
+  button.textContent = item.label;
+  button.disabled = item.enabled === false;
+  button.addEventListener('click', () => {
+    if (button.disabled) {
+      return;
+    }
+
+    closeTableToolMenu();
+    void item.action?.();
+  });
+  return button;
+}
+
+function setTableToolMenuContent(): void {
+  if (!tableToolMenu) {
+    return;
+  }
+
+  tableToolMenu.replaceChildren();
+
+  for (const item of buildActiveTableContextItems()) {
+    if (item.kind === 'separator') {
+      const divider = document.createElement('div');
+      divider.className = 'table-tool-divider';
+      tableToolMenu.append(divider);
+      continue;
+    }
+
+    tableToolMenu.append(createTableToolMenuActionButton(item));
+  }
+}
+
+function updateTablePropertiesDraft(nextDraft: { rows?: number; cols?: number }): void {
+  const fallbackRows = activeTableToolState?.rowCount ?? 2;
+  const fallbackCols = activeTableToolState?.colCount ?? 1;
+  tablePropertiesDraft = {
+    rows: Math.max(2, Math.floor(nextDraft.rows ?? tablePropertiesDraft?.rows ?? fallbackRows)),
+    cols: Math.max(1, Math.floor(nextDraft.cols ?? tablePropertiesDraft?.cols ?? fallbackCols))
+  };
+
+  if (tableToolPropertiesOpen) {
+    renderTableToolPropertiesContent();
+  }
+}
+
+function renderTableToolPropertiesContent(): void {
+  if (!tableToolProperties || !activeTableToolState) {
+    return;
+  }
+
+  const draft = tablePropertiesDraft ?? {
+    rows: activeTableToolState.rowCount,
+    cols: activeTableToolState.colCount
+  };
+  const grid = document.createElement('div');
+  grid.className = 'table-size-grid';
+
+  for (let row = 2; row <= 9; row += 1) {
+    for (let col = 1; col <= 8; col += 1) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'table-size-grid-cell';
+      if (row <= draft.rows && col <= draft.cols) {
+        cell.classList.add('is-selected');
+      }
+      cell.setAttribute('aria-label', `${row} x ${col}`);
+      cell.addEventListener('click', () => {
+        updateTablePropertiesDraft({ rows: row, cols: col });
+      });
+      grid.append(cell);
+    }
+  }
+
+  const sizeLabel = document.createElement('div');
+  sizeLabel.className = 'table-properties-caption';
+  sizeLabel.textContent = 'Size';
+
+  const sizeControls = document.createElement('div');
+  sizeControls.className = 'table-properties-size-controls';
+
+  const rowsInput = document.createElement('input');
+  rowsInput.className = 'table-properties-number';
+  rowsInput.type = 'number';
+  rowsInput.min = '2';
+  rowsInput.value = String(draft.rows);
+  rowsInput.addEventListener('change', () => {
+    updateTablePropertiesDraft({ rows: Number(rowsInput.value || 2) });
+  });
+
+  const separator = document.createElement('span');
+  separator.className = 'table-properties-size-separator';
+  separator.textContent = 'x';
+
+  const colsInput = document.createElement('input');
+  colsInput.className = 'table-properties-number';
+  colsInput.type = 'number';
+  colsInput.min = '1';
+  colsInput.value = String(draft.cols);
+  colsInput.addEventListener('change', () => {
+    updateTablePropertiesDraft({ cols: Number(colsInput.value || 1) });
+  });
+
+  const applySizeButton = document.createElement('button');
+  applySizeButton.type = 'button';
+  applySizeButton.className = 'table-properties-apply';
+  applySizeButton.textContent = 'Apply';
+  applySizeButton.addEventListener('click', () => {
+    applyActiveTableResize(draft.rows, draft.cols);
+  });
+
+  sizeControls.append(rowsInput, separator, colsInput, applySizeButton);
+
+  const alignmentLabel = document.createElement('div');
+  alignmentLabel.className = 'table-properties-caption';
+  alignmentLabel.textContent = 'Column Align';
+
+  const alignmentButtons = document.createElement('div');
+  alignmentButtons.className = 'table-properties-align-buttons';
+
+  for (const alignment of ['left', 'center', 'right'] as const) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'table-align-button';
+    if (activeTableToolState.currentAlignment === alignment) {
+      button.classList.add('is-active');
+    }
+    button.textContent = alignment[0]!.toUpperCase();
+    button.setAttribute('aria-label', alignment);
+    button.addEventListener('click', () => {
+      applyActiveTableColumnAlignment(alignment);
+    });
+    alignmentButtons.append(button);
+  }
+
+  tableToolProperties.replaceChildren(sizeLabel, grid, sizeControls, alignmentLabel, alignmentButtons);
+}
+
+function setTableToolMenuOpen(nextOpen: boolean): void {
+  tableToolMenuOpen = nextOpen;
+
+  if (nextOpen) {
+    tableToolPropertiesOpen = false;
+  }
+
+  if (!tableToolOverlay || !tableToolMenuButton || !tableToolMenu || !tableToolPropertiesButton || !tableToolProperties) {
+    return;
+  }
+
+  tableToolOverlay.classList.toggle('is-menu-open', tableToolMenuOpen);
+  tableToolMenuButton.setAttribute('aria-expanded', String(tableToolMenuOpen));
+  tableToolMenu.classList.toggle('is-hidden', !tableToolMenuOpen);
+  tableToolPropertiesButton.setAttribute('aria-expanded', String(tableToolPropertiesOpen));
+  tableToolProperties.classList.toggle('is-hidden', !tableToolPropertiesOpen);
+}
+
+function setTableToolPropertiesOpen(nextOpen: boolean): void {
+  tableToolPropertiesOpen = nextOpen;
+
+  if (nextOpen) {
+    tableToolMenuOpen = false;
+    if (activeTableToolState) {
+      tablePropertiesDraft = {
+        rows: activeTableToolState.rowCount,
+        cols: activeTableToolState.colCount
+      };
+      renderTableToolPropertiesContent();
+    }
+  }
+
+  if (!tableToolOverlay || !tableToolMenuButton || !tableToolMenu || !tableToolPropertiesButton || !tableToolProperties) {
+    return;
+  }
+
+  tableToolOverlay.classList.toggle('is-properties-open', tableToolPropertiesOpen);
+  tableToolMenuButton.setAttribute('aria-expanded', String(tableToolMenuOpen));
+  tableToolMenu.classList.toggle('is-hidden', !tableToolMenuOpen);
+  tableToolPropertiesButton.setAttribute('aria-expanded', String(tableToolPropertiesOpen));
+  tableToolProperties.classList.toggle('is-hidden', !tableToolPropertiesOpen);
+}
+
+function closeTableToolMenu(): void {
+  setTableToolMenuOpen(false);
+}
+
+function closeTableToolProperties(): void {
+  setTableToolPropertiesOpen(false);
+}
+
+function handleTableToolWindowPointerDown(event: PointerEvent): void {
+  if ((!tableToolMenuOpen && !tableToolPropertiesOpen) || !tableToolOverlay) {
+    return;
+  }
+
+  if (event.target instanceof Node && tableToolOverlay.contains(event.target)) {
+    return;
+  }
+
+  closeTableToolMenu();
+  closeTableToolProperties();
+}
+
+function clearTableToolOverlay(): void {
+  activeTableToolState = null;
+  tablePropertiesDraft = null;
+  tableToolMenuOpen = false;
+  tableToolPropertiesOpen = false;
+
+  if (!tableToolOverlay || !tableToolMenuButton || !tableToolPropertiesButton || !tableToolMenu || !tableToolProperties) {
+    return;
+  }
+
+  tableToolOverlay.classList.add('is-hidden');
+  tableToolOverlay.classList.remove('is-menu-open', 'is-properties-open');
+  tableToolMenuButton.setAttribute('aria-expanded', 'false');
+  tableToolPropertiesButton.setAttribute('aria-expanded', 'false');
+  tableToolMenu.classList.add('is-hidden');
+  tableToolProperties.classList.add('is-hidden');
+  tableToolMenu.replaceChildren();
+  tableToolProperties.replaceChildren();
+}
+
+function getTableRectAtStart(doc: EditorView['state']['doc'], tableStart: number) {
+  const tablePos = tableStart - 1;
+  const table = doc.nodeAt(tablePos);
+
+  if (!table || table.type.spec.tableRole !== 'table') {
+    return null;
+  }
+
+  const map = TableMap.get(table);
+  return {
+    left: 0,
+    top: 0,
+    right: map.width,
+    bottom: map.height,
+    tableStart,
+    map,
+    table
+  };
+}
+
+function renderTableToolOverlay(documentId: string): void {
+  if (
+    !milkdownEditor ||
+    !milkdownHost ||
+    !tableToolOverlay ||
+    !tableToolMenuButton ||
+    !tableToolPropertiesButton ||
+    !tableToolMenu ||
+    !tableToolProperties ||
+    milkdownDocumentId !== documentId ||
+    activeDocumentId !== documentId
+  ) {
+    clearTableToolOverlay();
+    return;
+  }
+
+  const view = milkdownEditor.action((ctx) => ctx.get(editorViewCtx));
+  const rect = getCurrentTableRect(view);
+
+  if (!rect) {
+    clearTableToolOverlay();
+    return;
+  }
+
+  const tablePos = rect.tableStart - 1;
+  const tableElement = view.nodeDOM(tablePos);
+
+  if (!(tableElement instanceof HTMLElement)) {
+    clearTableToolOverlay();
+    return;
+  }
+
+  const nextState: ActiveTableToolState = {
+    documentId,
+    tablePos,
+    tableStart: rect.tableStart,
+    rowCount: rect.map.height,
+    colCount: rect.map.width,
+    currentColumn: rect.left,
+    currentAlignment: normalizeTableColumnAlignment(
+      rect.table.firstChild?.child(rect.left)?.attrs.alignment ?? null
+    )
+  };
+
+  if (!activeTableToolState || activeTableToolState.tableStart !== nextState.tableStart) {
+    tableToolMenuOpen = false;
+    tableToolPropertiesOpen = false;
+    tablePropertiesDraft = {
+      rows: nextState.rowCount,
+      cols: nextState.colCount
+    };
+  }
+
+  activeTableToolState = nextState;
+
+  const hostBounds = milkdownHost.getBoundingClientRect();
+  const tableBounds = tableElement.getBoundingClientRect();
+  tableToolOverlay.classList.remove('is-hidden');
+  tableToolOverlay.style.top = `${Math.max(0, tableBounds.top - hostBounds.top - 10)}px`;
+  tableToolOverlay.style.left = `${Math.max(0, tableBounds.right - hostBounds.left - 8)}px`;
+  setTableToolMenuContent();
+  if (tableToolPropertiesOpen) {
+    renderTableToolPropertiesContent();
+  }
+  setTableToolMenuOpen(tableToolMenuOpen);
+  setTableToolPropertiesOpen(tableToolPropertiesOpen);
+}
+
 function applyHeadingBlockSelection(nextBlock: 'paragraph' | (1 | 2 | 3 | 4 | 5 | 6)): void {
   if (
     !activeHeadingMarkerState ||
@@ -5910,6 +6256,8 @@ function executeEditorCommandWithActiveSession(
   }
 
   closeHeadingMarkerMenu();
+  closeTableToolMenu();
+  closeTableToolProperties();
 
   return session.editor.action((ctx) => {
     const view = ctx.get(editorViewCtx);
@@ -5920,7 +6268,7 @@ function executeEditorCommandWithActiveSession(
     }
 
     requestSidebarRefreshForCurrentMode();
-    renderHeadingMarkerOverlay(activeDocument.id);
+    renderActiveMilkdownOverlays(activeDocument.id);
     view.focus();
     return true;
   });
@@ -6064,6 +6412,125 @@ function getCurrentTableRect(view: EditorView) {
   } catch {
     return null;
   }
+}
+
+function applyActiveTableColumnAlignment(alignment: TableColumnAlignment): boolean {
+  return executeEditorCommandWithActiveSession((_ctx, view) => {
+    const rect = getCurrentTableRect(view);
+
+    if (!rect) {
+      return false;
+    }
+
+    const tr = view.state.tr;
+    const seen = new Set<number>();
+
+    for (let row = 0; row < rect.map.height; row += 1) {
+      const mapIndex = row * rect.map.width + rect.left;
+      const cellPos = rect.tableStart + rect.map.map[mapIndex]!;
+
+      if (seen.has(cellPos)) {
+        continue;
+      }
+
+      seen.add(cellPos);
+      const cell = view.state.doc.nodeAt(cellPos);
+
+      if (!cell || cell.attrs.alignment === alignment) {
+        continue;
+      }
+
+      tr.setNodeMarkup(cellPos, undefined, {
+        ...cell.attrs,
+        alignment
+      });
+    }
+
+    if (!tr.docChanged) {
+      return false;
+    }
+
+    tr.scrollIntoView();
+    view.dispatch(tr);
+    return true;
+  });
+}
+
+function applyActiveTableResize(targetRows: number, targetCols: number): boolean {
+  return executeEditorCommandWithActiveSession((_ctx, view) => {
+    const rect = getCurrentTableRect(view);
+
+    if (!rect) {
+      return false;
+    }
+
+    const plan = resolveTableResizePlan({
+      currentRows: rect.map.height,
+      currentCols: rect.map.width,
+      targetRows,
+      targetCols
+    });
+
+    if (
+      plan.addRowsAfter === 0 &&
+      plan.removeRowsFromEnd === 0 &&
+      plan.addColsAfter === 0 &&
+      plan.removeColsFromEnd === 0
+    ) {
+      return false;
+    }
+
+    let tr = view.state.tr;
+    let workingRect = getTableRectAtStart(tr.doc, rect.tableStart);
+
+    if (!workingRect) {
+      return false;
+    }
+
+    for (let index = 0; index < plan.addRowsAfter; index += 1) {
+      tr = addRow(tr, workingRect, workingRect.map.height);
+      workingRect = getTableRectAtStart(tr.doc, rect.tableStart);
+
+      if (!workingRect) {
+        return false;
+      }
+    }
+
+    for (let index = 0; index < plan.removeRowsFromEnd; index += 1) {
+      removeRow(tr, workingRect, workingRect.map.height - 1);
+      workingRect = getTableRectAtStart(tr.doc, rect.tableStart);
+
+      if (!workingRect) {
+        return false;
+      }
+    }
+
+    for (let index = 0; index < plan.addColsAfter; index += 1) {
+      tr = addColumn(tr, workingRect, workingRect.map.width);
+      workingRect = getTableRectAtStart(tr.doc, rect.tableStart);
+
+      if (!workingRect) {
+        return false;
+      }
+    }
+
+    for (let index = 0; index < plan.removeColsFromEnd; index += 1) {
+      removeColumn(tr, workingRect, workingRect.map.width - 1);
+      workingRect = getTableRectAtStart(tr.doc, rect.tableStart);
+
+      if (!workingRect) {
+        return false;
+      }
+    }
+
+    if (!tr.docChanged) {
+      return false;
+    }
+
+    tr.scrollIntoView();
+    view.dispatch(tr);
+    return true;
+  });
 }
 
 function moveCurrentTableRow(delta: -1 | 1): boolean {
@@ -6741,10 +7208,89 @@ function createHeadingMarkerOverlay(
   return { overlay, badge, menu };
 }
 
+function createTableToolOverlay(
+  host: HTMLDivElement,
+  documentId: string
+): {
+  overlay: HTMLDivElement;
+  menuButton: HTMLButtonElement;
+  propertiesButton: HTMLButtonElement;
+  menu: HTMLDivElement;
+  properties: HTMLDivElement;
+} {
+  const overlay = document.createElement('div');
+  overlay.className = 'table-tool-overlay is-hidden';
+
+  const buttons = document.createElement('div');
+  buttons.className = 'table-tool-buttons';
+
+  const menuButton = document.createElement('button');
+  menuButton.type = 'button';
+  menuButton.className = 'table-tool-button';
+  menuButton.textContent = '...';
+  menuButton.setAttribute('aria-label', 'Open table tools');
+  menuButton.setAttribute('aria-haspopup', 'menu');
+  menuButton.setAttribute('aria-expanded', 'false');
+  menuButton.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  });
+  menuButton.addEventListener('click', () => {
+    if (!activeTableToolState || activeTableToolState.documentId !== documentId) {
+      return;
+    }
+
+    setTableToolMenuOpen(!tableToolMenuOpen);
+  });
+
+  const propertiesButton = document.createElement('button');
+  propertiesButton.type = 'button';
+  propertiesButton.className = 'table-tool-button';
+  propertiesButton.textContent = 'grid';
+  propertiesButton.setAttribute('aria-label', 'Open table properties');
+  propertiesButton.setAttribute('aria-expanded', 'false');
+  propertiesButton.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  });
+  propertiesButton.addEventListener('click', () => {
+    if (!activeTableToolState || activeTableToolState.documentId !== documentId) {
+      return;
+    }
+
+    setTableToolPropertiesOpen(!tableToolPropertiesOpen);
+  });
+
+  const menu = document.createElement('div');
+  menu.className = 'table-tool-menu is-hidden';
+  menu.setAttribute('role', 'menu');
+  menu.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  });
+
+  const properties = document.createElement('div');
+  properties.className = 'table-properties-panel is-hidden';
+  properties.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+  });
+
+  buttons.append(menuButton, propertiesButton);
+  overlay.append(buttons, menu, properties);
+  host.append(overlay);
+  return { overlay, menuButton, propertiesButton, menu, properties };
+}
+
+function renderActiveMilkdownOverlays(documentId: string): void {
+  renderHeadingMarkerOverlay(documentId);
+  renderTableToolOverlay(documentId);
+  renderCodeBlockLanguageControls(documentId);
+}
+
 function scheduleHeadingMarkerRefresh(documentId: string): void {
   window.requestAnimationFrame(() => {
     if (activeDocumentId === documentId) {
-      renderHeadingMarkerOverlay(documentId);
+      renderActiveMilkdownOverlays(documentId);
     }
   });
 }
@@ -6800,17 +7346,212 @@ function getTrailingCodeBlockInfo(view: EditorView): TrailingCodeBlockInfo | nul
 }
 
 function normalizeCodeBlockLanguage(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
+  return normalizeCodeBlockLanguageInput(value);
+}
+
+function clearCodeBlockLanguageEditState(): void {
+  activeCodeBlockLanguageEditState = null;
+}
+
+function commitCodeBlockLanguageEdit(documentId: string, pos: number, rawValue: string): void {
+  const activeDocument = getActiveDocument();
+  const session = getActiveMilkdownSession();
+
+  if (!activeDocument || !session || activeDocument.id !== documentId || milkdownDocumentId !== documentId) {
+    clearCodeBlockLanguageEditState();
+    return;
   }
 
-  const trimmed = value.trim().toLowerCase();
+  const nextLanguage = normalizeCodeBlockLanguage(rawValue);
 
-  if (trimmed.length === 0) {
-    return null;
+  session.editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx);
+    const node = view.state.doc.nodeAt(pos);
+
+    if (!node || node.type.name !== 'code_block') {
+      clearCodeBlockLanguageEditState();
+      renderCodeBlockLanguageControls(documentId);
+      return;
+    }
+
+    const currentLanguage = normalizeCodeBlockLanguage(node.attrs.language);
+
+    clearCodeBlockLanguageEditState();
+
+    if (currentLanguage === nextLanguage) {
+      renderCodeBlockLanguageControls(documentId);
+      view.focus();
+      return;
+    }
+
+    const tr = view.state.tr
+      .setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        language: nextLanguage ?? ''
+      })
+      .scrollIntoView();
+
+    view.dispatch(tr);
+    renderCodeBlockLanguageControls(documentId);
+    view.focus();
+  });
+}
+
+function focusCodeBlockLanguageInput(documentId: string, pos: number): void {
+  window.requestAnimationFrame(() => {
+    if (!milkdownHost || milkdownDocumentId !== documentId) {
+      return;
+    }
+
+    const input = milkdownHost.querySelector<HTMLInputElement>(
+      `.code-block-language-shell[data-code-block-pos="${pos}"] .code-block-language-input`
+    );
+    input?.focus();
+    input?.select();
+  });
+}
+
+function startCodeBlockLanguageEdit(documentId: string, pos: number, language: string | null): void {
+  activeCodeBlockLanguageEditState = {
+    documentId,
+    pos,
+    draft: language ?? ''
+  };
+  renderCodeBlockLanguageControls(documentId);
+  focusCodeBlockLanguageInput(documentId, pos);
+}
+
+function createCodeBlockLanguageShell(pre: HTMLElement): HTMLDivElement {
+  const shell = document.createElement('div');
+  shell.className = 'code-block-language-shell';
+  pre.append(shell);
+  return shell;
+}
+
+function renderCodeBlockLanguageShell(
+  shell: HTMLDivElement,
+  documentId: string,
+  pos: number,
+  language: string | null
+): void {
+  shell.dataset.codeBlockPos = String(pos);
+  shell.replaceChildren();
+
+  const editState =
+    activeCodeBlockLanguageEditState &&
+    activeCodeBlockLanguageEditState.documentId === documentId &&
+    activeCodeBlockLanguageEditState.pos === pos
+      ? activeCodeBlockLanguageEditState
+      : null;
+
+  if (editState) {
+    shell.classList.add('is-editing');
+    const input = document.createElement('input');
+    input.className = 'code-block-language-input';
+    input.type = 'text';
+    input.value = editState.draft;
+    input.placeholder = DEFAULT_CODE_BLOCK_LANGUAGE_BADGE_TEXT;
+    input.addEventListener('input', () => {
+      if (
+        activeCodeBlockLanguageEditState &&
+        activeCodeBlockLanguageEditState.documentId === documentId &&
+        activeCodeBlockLanguageEditState.pos === pos
+      ) {
+        activeCodeBlockLanguageEditState = {
+          ...activeCodeBlockLanguageEditState,
+          draft: input.value
+        };
+      }
+    });
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        commitCodeBlockLanguageEdit(documentId, pos, input.value);
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        clearCodeBlockLanguageEditState();
+        renderCodeBlockLanguageControls(documentId);
+        milkdownEditor?.action((ctx) => ctx.get(editorViewCtx).focus());
+      }
+    });
+    input.addEventListener('blur', () => {
+      commitCodeBlockLanguageEdit(documentId, pos, input.value);
+    });
+    input.addEventListener('pointerdown', (event) => {
+      event.stopPropagation();
+    });
+    shell.append(input);
+    return;
   }
 
-  return CODE_BLOCK_LANGUAGE_ALIASES[trimmed] ?? trimmed;
+  shell.classList.remove('is-editing');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'code-block-language-chip';
+  button.textContent = getCodeBlockLanguageBadgeText(language);
+  button.setAttribute('aria-label', 'Edit code block language');
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  button.addEventListener('click', () => {
+    startCodeBlockLanguageEdit(documentId, pos, language);
+  });
+  shell.append(button);
+}
+
+function renderCodeBlockLanguageControls(documentId: string): void {
+  if (
+    !milkdownEditor ||
+    !milkdownHost ||
+    milkdownDocumentId !== documentId ||
+    activeDocumentId !== documentId
+  ) {
+    clearCodeBlockLanguageEditState();
+    return;
+  }
+
+  const view = milkdownEditor.action((ctx) => ctx.get(editorViewCtx));
+  const activePositions = new Set<string>();
+
+  view.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'code_block') {
+      return true;
+    }
+
+    const pre = view.nodeDOM(pos);
+
+    if (!(pre instanceof HTMLElement)) {
+      return false;
+    }
+
+    activePositions.add(String(pos));
+    const shell =
+      pre.querySelector<HTMLDivElement>(':scope > .code-block-language-shell') ??
+      createCodeBlockLanguageShell(pre);
+
+    renderCodeBlockLanguageShell(shell, documentId, pos, normalizeCodeBlockLanguage(node.attrs.language));
+    return false;
+  });
+
+  for (const shell of Array.from(milkdownHost.querySelectorAll<HTMLDivElement>('.code-block-language-shell'))) {
+    if (!activePositions.has(shell.dataset.codeBlockPos ?? '')) {
+      shell.remove();
+    }
+  }
+
+  if (
+    activeCodeBlockLanguageEditState &&
+    activeCodeBlockLanguageEditState.documentId === documentId &&
+    !activePositions.has(String(activeCodeBlockLanguageEditState.pos))
+  ) {
+    clearCodeBlockLanguageEditState();
+  }
 }
 
 async function loadHighlightJsApi(): Promise<HighlightJsApi> {
@@ -8930,6 +9671,8 @@ function renderEditorEmptyState(): void {
   closeFindReplaceBar();
   clearHeadingMarkerOverlay();
   clearHeadingTargetHighlight();
+  clearTableToolOverlay();
+  clearCodeBlockLanguageEditState();
   content.className = 'viewer-content viewer-content-empty';
   content.replaceChildren();
 
@@ -8949,6 +9692,8 @@ function renderEditorEmptyState(): void {
 function renderSourceEditor(documentState: DocumentState): void {
   clearHeadingMarkerOverlay();
   clearHeadingTargetHighlight();
+  clearTableToolOverlay();
+  clearCodeBlockLanguageEditState();
   content.className = 'viewer-content viewer-content-source';
 
   if (sourceEditorShell.parentElement !== content) {
@@ -8998,7 +9743,7 @@ async function renderMilkdownEditor(
   restoreMilkdownSessionScroll(sessionResult.session);
   requestSidebarRefreshForCurrentMode();
   scheduleNativeMenuStateSync();
-  renderHeadingMarkerOverlay(documentState.id);
+  renderActiveMilkdownOverlays(documentState.id);
   scheduleOutlineActiveStateRefresh(documentState.id);
   pruneMilkdownSessionCache(documentState.id);
   if (findReplaceOpen) {
@@ -9106,6 +9851,7 @@ async function ensureMilkdownSession(
     }
 
     const marker = createHeadingMarkerOverlay(host, documentId);
+    const tableTool = createTableToolOverlay(host, documentId);
     const session: MilkdownSession = {
       documentId,
       editor: createdEditor,
@@ -9120,6 +9866,14 @@ async function ensureMilkdownSession(
       headingMarkerMenu: marker.menu,
       headingMarkerMenuOpen: false,
       activeHeadingMarkerState: null,
+      tableToolOverlay: tableTool.overlay,
+      tableToolMenuButton: tableTool.menuButton,
+      tableToolPropertiesButton: tableTool.propertiesButton,
+      tableToolMenu: tableTool.menu,
+      tableToolProperties: tableTool.properties,
+      tableToolMenuOpen: false,
+      tableToolPropertiesOpen: false,
+      activeTableToolState: null,
       lastUsedAt: Date.now()
     };
 
@@ -9165,7 +9919,7 @@ function activatePreparedDocument(
   restoreMilkdownSessionScroll(session);
   renderDocumentHeader();
   requestSidebarRefreshForCurrentMode();
-  renderHeadingMarkerOverlay(documentState.id);
+  renderActiveMilkdownOverlays(documentState.id);
   scheduleOutlineActiveStateRefresh(documentState.id);
   pruneMilkdownSessionCache(documentState.id);
 }
@@ -9214,7 +9968,7 @@ function createMilkdownEditorForDocument(documentState: DocumentState, host: HTM
       }).updated(() => {
         if (activeDocumentId === documentId) {
           scheduleOutlineSidebarRefresh(documentId);
-          renderHeadingMarkerOverlay(documentId);
+          renderActiveMilkdownOverlays(documentId);
         }
       }).selectionUpdated((_ctx, selection) => {
         if (activeDocumentId === documentId) {
@@ -9224,7 +9978,7 @@ function createMilkdownEditorForDocument(documentState: DocumentState, host: HTM
             rememberMilkdownSelection(targetDocument, selection);
           }
 
-          renderHeadingMarkerOverlay(documentId);
+          renderActiveMilkdownOverlays(documentId);
           scheduleOutlineActiveStateRefresh(documentId);
           scheduleNativeMenuStateSync();
         }
