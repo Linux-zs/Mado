@@ -72,6 +72,10 @@ import {
   resolveSaveFlowDecision
 } from './save-flow-state';
 import {
+  resolveRecentFilesErrorReport,
+  resolveRecentFilesErrorReset
+} from './recent-files-error-state';
+import {
   createSourceHistoryState,
   recordSourceHistorySnapshot,
   stepSourceHistoryState,
@@ -814,12 +818,12 @@ filesSidebarSearchBar.className = 'sidebar-search';
 const filesSidebarSearchInput = document.createElement('input');
 filesSidebarSearchInput.className = 'sidebar-search-input';
 filesSidebarSearchInput.type = 'text';
-filesSidebarSearchInput.placeholder = '搜索文件';
+filesSidebarSearchInput.placeholder = '鎼滅储鏂囦欢';
 filesSidebarSearchInput.spellcheck = false;
 const filesSidebarSearchClose = document.createElement('button');
 filesSidebarSearchClose.type = 'button';
 filesSidebarSearchClose.className = 'sidebar-search-close';
-filesSidebarSearchClose.textContent = '关闭';
+filesSidebarSearchClose.textContent = '鍏抽棴';
 filesSidebarSearchBar.append(filesSidebarSearchInput, filesSidebarSearchClose);
 const filesSidebarNotice = document.createElement('p');
 filesSidebarNotice.className = 'sidebar-empty';
@@ -1034,7 +1038,7 @@ deleteConfirmActions.className = 'modal-actions';
 const deleteConfirmCancel = document.createElement('button');
 deleteConfirmCancel.type = 'button';
 deleteConfirmCancel.className = 'modal-button is-secondary';
-deleteConfirmCancel.textContent = '取消';
+deleteConfirmCancel.textContent = '鍙栨秷';
 
 const deleteConfirmSubmit = document.createElement('button');
 deleteConfirmSubmit.type = 'button';
@@ -2822,25 +2826,29 @@ function createRecentMenuEntries(): RecentMenuEntry[] {
 function reportRecentFilesStorageError(error: unknown): void {
   console.error('Failed to persist recent files to localStorage.', error);
 
-  if (!recentFilesStorageErrorShown) {
-    recentFilesStorageErrorShown = true;
-    showHeaderNotice('最近文件列表无法写入本地存储。', true);
+  const decision = resolveRecentFilesErrorReport('storage', recentFilesStorageErrorShown);
+  recentFilesStorageErrorShown = decision.nextShown;
+
+  if (decision.notice) {
+    showHeaderNotice(decision.notice, true);
   }
 }
 
 function reportRecentFilesMenuSyncError(error: unknown): void {
   console.error('Failed to sync recent files menu.', error);
 
-  if (!recentFilesMenuSyncErrorShown) {
-    recentFilesMenuSyncErrorShown = true;
-    showHeaderNotice('最近文件菜单同步失败。', true);
+  const decision = resolveRecentFilesErrorReport('menu-sync', recentFilesMenuSyncErrorShown);
+  recentFilesMenuSyncErrorShown = decision.nextShown;
+
+  if (decision.notice) {
+    showHeaderNotice(decision.notice, true);
   }
 }
 
 function persistRecentFiles(): void {
   try {
     window.localStorage.setItem(RECENT_FILES_STORAGE_KEY, JSON.stringify(recentFiles));
-    recentFilesStorageErrorShown = false;
+    recentFilesStorageErrorShown = resolveRecentFilesErrorReset(recentFilesStorageErrorShown).nextShown;
   } catch (error) {
     reportRecentFilesStorageError(error);
   }
@@ -2948,7 +2956,7 @@ async function flushRecentFilesMenuSync(): Promise<void> {
     await invoke<void>('update_recent_files_menu', {
       entries: createRecentMenuEntries()
     });
-    recentFilesMenuSyncErrorShown = false;
+    recentFilesMenuSyncErrorShown = resolveRecentFilesErrorReset(recentFilesMenuSyncErrorShown).nextShown;
   } catch (error) {
     reportRecentFilesMenuSyncError(error);
     recentFilesMenuPendingRevision = recentFilesRevision;

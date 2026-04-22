@@ -14,6 +14,7 @@
     "src/directory-refresh-state.ts",
     "src/find-replace-state.ts",
     "src/milkdown-sync-state.ts",
+    "src/recent-files-error-state.ts",
     "src/save-flow-state.ts",
     "src/source-history-state.ts",
     "src/shortcut-guards.ts"
