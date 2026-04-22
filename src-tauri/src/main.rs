@@ -177,19 +177,6 @@ struct RenamedDirectoryPayload {
   parent_path: String,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PathPropertiesPayload {
-  name: String,
-  path: String,
-  parent_path: String,
-  item_kind: String,
-  size_bytes: Option<u64>,
-  modified_at: Option<u64>,
-  extension: Option<String>,
-  is_directory: bool,
-}
-
 #[tauri::command]
 fn open_markdown_file(path: String) -> Result<OpenedDocument, String> {
   let file_path = Path::new(&path);
@@ -452,43 +439,6 @@ fn reveal_path_in_explorer(path: String) -> Result<(), String> {
     let _ = target_path;
     Err("This action is currently only supported on Windows.".to_string())
   }
-}
-
-#[tauri::command]
-fn get_path_properties(path: String) -> Result<PathPropertiesPayload, String> {
-  let target_path = Path::new(&path);
-
-  if !target_path.exists() {
-    return Err("The selected path does not exist.".to_string());
-  }
-
-  let metadata = fs::metadata(target_path).map_err(|error| format!("Failed to read properties: {error}"))?;
-  let name = target_path
-    .file_name()
-    .and_then(|name| name.to_str())
-    .ok_or_else(|| "Could not resolve file name.".to_string())?
-    .to_string();
-  let parent_path = target_path
-    .parent()
-    .and_then(Path::to_str)
-    .unwrap_or("")
-    .to_string();
-  let modified_at = metadata
-    .modified()
-    .ok()
-    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-    .map(|duration| duration.as_secs());
-
-  Ok(PathPropertiesPayload {
-    extension: target_path.extension().and_then(|value| value.to_str()).map(|value| value.to_string()),
-    item_kind: if metadata.is_dir() { "folder".to_string() } else { "file".to_string() },
-    modified_at,
-    name,
-    parent_path,
-    path: target_path.to_string_lossy().into_owned(),
-    size_bytes: if metadata.is_file() { Some(metadata.len()) } else { None },
-    is_directory: metadata.is_dir(),
-  })
 }
 
 fn read_markdown_document(file_path: &Path) -> Result<OpenedDocument, String> {
@@ -1489,7 +1439,6 @@ fn main() {
       rename_directory,
       move_path_to_recycle_bin,
       reveal_path_in_explorer,
-      get_path_properties,
       validate_markdown_file_name,
       validate_markdown_save_path,
       update_recent_files_menu,

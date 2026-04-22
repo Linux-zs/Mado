@@ -1377,10 +1377,6 @@ body.is-resizing-layout .workspace-resize-handle::after,
   box-shadow: 0 24px 50px rgba(0, 0, 0, 0.16);
 }
 
-.modal-card-properties {
-  width: min(100%, 520px);
-}
-
 .modal-title {
   margin: 0 0 6px;
   font-size: 18px;
@@ -1454,27 +1450,6 @@ body.is-resizing-layout .workspace-resize-handle::after,
 .modal-button.is-danger {
   background: #b85a52;
   color: #fffdf9;
-}
-
-.properties-list {
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  gap: 10px 12px;
-  margin: 0;
-}
-
-.properties-list dt {
-  margin: 0;
-  color: rgba(44, 39, 31, 0.62);
-  font-size: 12px;
-}
-
-.properties-list dd {
-  margin: 0;
-  color: #2a241e;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
 }
 
 .context-menu-layer {
