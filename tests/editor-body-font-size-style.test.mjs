@@ -24,8 +24,8 @@ function getRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
-test('editor body text uses 18px baseline while source editor remains unchanged', () => {
-  assert.match(getRuleBody('.milkdown-host .ProseMirror'), /font:\s*18px\/1\.78 var\(--font-body\);/);
-  assert.match(getRuleBody('.viewer-line'), /font:\s*18px\/1\.76 var\(--font-body\);/);
+test('editor body text uses 17px baseline while source editor remains unchanged', () => {
+  assert.match(getRuleBody('.milkdown-host .ProseMirror'), /font:\s*17px\/1\.78 var\(--font-body\);/);
+  assert.match(getRuleBody('.viewer-line'), /font:\s*17px\/1\.76 var\(--font-body\);/);
   assert.match(getRuleBody('.source-editor'), /font:\s*13px\/1\.72 var\(--font-code\);/);
 });
