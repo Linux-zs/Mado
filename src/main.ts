@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import {
   commandsCtx,
@@ -67,7 +68,7 @@ import {
 import {
   createDefaultEditorScalePercent,
   normalizeEditorScalePercent,
-  resetEditorScalePercent,
+  resolveEditorScaleFactor,
   shouldHandleEditorScaleWheel,
   stepEditorScalePercent
 } from './editor-scale-state';
@@ -896,9 +897,6 @@ workspaceResizeHandle.setAttribute('aria-label', '\u8c03\u6574\u4fa7\u680f\u5bbd
 const editorPanel = document.createElement('section');
 editorPanel.className = 'editor-panel';
 
-const editorViewport = document.createElement('div');
-editorViewport.className = 'editor-viewport';
-
 const header = document.createElement('header');
 header.className = 'viewer-header';
 
@@ -1103,14 +1101,13 @@ contextSubmenuPanel.setAttribute('role', 'menu');
 contextMenuLayer.append(contextMenuPanel, contextSubmenuPanel);
 
 header.append(fileName, fileHint);
-editorViewport.append(header, findReplaceBar, content);
-editorPanel.append(editorViewport, statusBar);
+editorPanel.append(header, findReplaceBar, content, statusBar);
 frame.append(sidebar, workspaceResizeHandle, editorPanel);
 shell.append(frame, contextMenuLayer, renameOverlay, deleteConfirmOverlay);
 app.replaceChildren(shell);
 
 applyAppearanceSettings();
-applyEditorScalePercent();
+void applyEditorScalePercent();
 applySidebarWidth(sidebarWidth);
 applySidebarCollapsedState();
 syncAppearanceMenuState();
@@ -1389,7 +1386,7 @@ window.addEventListener(
   true
 );
 
-editorViewport.addEventListener('wheel', handleEditorScaleWheel, { passive: false });
+window.addEventListener('wheel', handleEditorScaleWheel, { passive: false });
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
@@ -2710,24 +2707,15 @@ function persistEditorScalePercent(): void {
   }
 }
 
-function refreshEditorScaleOverlays(): void {
-  if (editorViewMode !== 'rendered' || !activeDocumentId) {
-    return;
+async function applyEditorScalePercent(): Promise<void> {
+  try {
+    await getCurrentWebview().setZoom(resolveEditorScaleFactor(editorScalePercent));
+  } catch (error) {
+    console.error('Failed to apply webview zoom.', error);
   }
-
-  window.requestAnimationFrame(() => {
-    if (editorViewMode === 'rendered' && activeDocumentId) {
-      renderActiveMilkdownOverlays(activeDocumentId);
-    }
-  });
 }
 
-function applyEditorScalePercent(): void {
-  editorViewport.style.setProperty('--editor-scale', String(editorScalePercent / 100));
-  refreshEditorScaleOverlays();
-}
-
-function setEditorScalePercent(nextPercent: number): void {
+async function setEditorScalePercent(nextPercent: number): Promise<void> {
   const normalized = normalizeEditorScalePercent(nextPercent);
 
   if (normalized === editorScalePercent) {
@@ -2735,7 +2723,7 @@ function setEditorScalePercent(nextPercent: number): void {
   }
 
   editorScalePercent = normalized;
-  applyEditorScalePercent();
+  await applyEditorScalePercent();
   persistEditorScalePercent();
 }
 
@@ -7111,9 +7099,9 @@ function getShortcutTargetKind(target: EventTarget | null): ShortcutTargetKind {
   return 'other';
 }
 
-function isTargetWithinEditorViewport(target: EventTarget | null): boolean {
+function isTargetWithinAppShell(target: EventTarget | null): boolean {
   const element = getShortcutEventTargetElement(target);
-  return Boolean(element && editorViewport.contains(element));
+  return Boolean(app && element && app.contains(element));
 }
 
 function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
@@ -7123,19 +7111,11 @@ function isBlockingGlobalShortcutTarget(target: EventTarget | null): boolean {
   });
 }
 
-function isEditorScaleResetShortcut(event: KeyboardEvent): boolean {
-  if (event.metaKey || !event.ctrlKey || event.shiftKey || event.altKey) {
-    return false;
-  }
-
-  return event.code === 'Digit0' || event.code === 'Numpad0' || normalizeShortcutEventKey(event) === '0';
-}
-
 function handleEditorScaleWheel(event: WheelEvent): void {
   if (
     !shouldHandleEditorScaleWheel({
       ctrlKey: event.ctrlKey,
-      targetWithinEditor: isTargetWithinEditorViewport(event.target)
+      targetWithinApp: isTargetWithinAppShell(event.target)
     })
   ) {
     return;
@@ -7143,24 +7123,7 @@ function handleEditorScaleWheel(event: WheelEvent): void {
 
   event.preventDefault();
   event.stopPropagation();
-  setEditorScalePercent(stepEditorScalePercent(editorScalePercent, event.deltaY));
-}
-
-function handleEditorScaleResetShortcut(event: KeyboardEvent): boolean {
-  if (
-    event.defaultPrevented ||
-    event.repeat ||
-    event.isComposing ||
-    !isEditorScaleResetShortcut(event) ||
-    !isTargetWithinEditorViewport(event.target)
-  ) {
-    return false;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-  setEditorScalePercent(resetEditorScalePercent());
-  return true;
+  void setEditorScalePercent(stepEditorScalePercent(editorScalePercent, event.deltaY));
 }
 
 function normalizeShortcutEventKey(event: KeyboardEvent): string {
@@ -7544,10 +7507,6 @@ async function dispatchAppCommand(
 }
 
 function handleGlobalFileShortcut(event: KeyboardEvent): void {
-  if (handleEditorScaleResetShortcut(event)) {
-    return;
-  }
-
   if (!canHandleFileShortcutEvent(event)) {
     return;
   }

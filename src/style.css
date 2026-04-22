@@ -8,7 +8,6 @@
   --motion-slow: 200ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-fade-distance: 8px;
-  --editor-scale: 1;
   --font-ui: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-body: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-heading: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
@@ -683,18 +682,6 @@ body.is-resizing-layout .workspace-resize-handle::after,
   min-height: 0;
   flex-direction: column;
   background: var(--color-workspace-surface);
-}
-
-.editor-viewport {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  width: calc(100% / var(--editor-scale));
-  height: calc(100% / var(--editor-scale));
-  flex-direction: column;
-  background: var(--color-workspace-surface);
-  zoom: var(--editor-scale);
 }
 
 .viewer-header {

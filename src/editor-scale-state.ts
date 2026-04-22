@@ -31,9 +31,13 @@ export function stepEditorScalePercent(currentPercent: number, deltaY: number): 
   return normalizeEditorScalePercent(currentPercent + direction * EDITOR_SCALE_STEP_PERCENT);
 }
 
+export function resolveEditorScaleFactor(percent: number): number {
+  return normalizeEditorScalePercent(percent) / 100;
+}
+
 export function shouldHandleEditorScaleWheel(options: {
   ctrlKey: boolean;
-  targetWithinEditor: boolean;
+  targetWithinApp: boolean;
 }): boolean {
-  return options.ctrlKey && options.targetWithinEditor;
+  return options.ctrlKey && options.targetWithinApp;
 }

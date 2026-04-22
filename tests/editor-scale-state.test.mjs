@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   createDefaultEditorScalePercent,
   normalizeEditorScalePercent,
+  resolveEditorScaleFactor,
   stepEditorScalePercent,
   shouldHandleEditorScaleWheel,
   resetEditorScalePercent
@@ -28,8 +29,14 @@ test('stepEditorScalePercent applies 5 percent wheel steps with clamping', () =>
   assert.equal(stepEditorScalePercent(70, 120), 70);
 });
 
-test('shouldHandleEditorScaleWheel requires ctrl and an editor target', () => {
-  assert.equal(shouldHandleEditorScaleWheel({ ctrlKey: true, targetWithinEditor: true }), true);
-  assert.equal(shouldHandleEditorScaleWheel({ ctrlKey: false, targetWithinEditor: true }), false);
-  assert.equal(shouldHandleEditorScaleWheel({ ctrlKey: true, targetWithinEditor: false }), false);
+test('resolveEditorScaleFactor converts percent into webview zoom factor', () => {
+  assert.equal(resolveEditorScaleFactor(100), 1);
+  assert.equal(resolveEditorScaleFactor(70), 0.7);
+  assert.equal(resolveEditorScaleFactor(130), 1.3);
+});
+
+test('shouldHandleEditorScaleWheel requires ctrl and an in-app target', () => {
+  assert.equal(shouldHandleEditorScaleWheel({ ctrlKey: true, targetWithinApp: true }), true);
+  assert.equal(shouldHandleEditorScaleWheel({ ctrlKey: false, targetWithinApp: true }), false);
+  assert.equal(shouldHandleEditorScaleWheel({ ctrlKey: true, targetWithinApp: false }), false);
 });

@@ -24,12 +24,8 @@ function getRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
-test('editor viewport uses runtime zoom with layout compensation', () => {
-  const rootRule = getRuleBody(':root');
-  const editorViewportRule = getRuleBody('.editor-viewport');
-
-  assert.match(rootRule, /--editor-scale:\s*1;/);
-  assert.match(editorViewportRule, /zoom:\s*var\(--editor-scale\);/);
-  assert.match(editorViewportRule, /width:\s*calc\(100%\s*\/\s*var\(--editor-scale\)\);/);
-  assert.match(editorViewportRule, /height:\s*calc\(100%\s*\/\s*var\(--editor-scale\)\);/);
+test('editor styles no longer rely on local css zoom scaling', () => {
+  assert.doesNotMatch(css, /--editor-scale:\s*1;/);
+  assert.doesNotMatch(css, /\.editor-viewport\s*\{/);
+  assert.doesNotMatch(css, /\bzoom:\s*var\(--editor-scale\);/);
 });
