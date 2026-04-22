@@ -83,6 +83,7 @@ import {
 } from './save-flow-state';
 import {
   isTablePropertiesInteractionRole,
+  resolveTablePropertiesDisplaySize,
   resolveTablePropertiesPanelTransition,
   TABLE_ALIGNMENT_BUTTON_LABELS,
   TABLE_PROPERTIES_ALIGNMENT_LABEL,
@@ -336,6 +337,7 @@ type ActiveTableToolState = {
 
 type TableToolPropertiesControls = {
   sizeLabel: HTMLDivElement;
+  grid: HTMLDivElement;
   gridCells: Array<{ row: number; col: number; element: HTMLButtonElement }>;
   rowsInput: HTMLInputElement;
   colsInput: HTMLInputElement;
@@ -667,6 +669,7 @@ let tableToolProperties: HTMLDivElement | null = null;
 let tableToolMenuOpen = false;
 let tableToolPropertiesOpen = false;
 let tablePropertiesDraft: { rows: number; cols: number } | null = null;
+let tablePropertiesHoverPreview: { rows: number; cols: number } | null = null;
 const tableToolPropertiesControls = new WeakMap<HTMLDivElement, TableToolPropertiesControls>();
 let sidebarWidth = loadWorkspaceSidebarWidth();
 let workspaceResizeActive = false;
@@ -5822,6 +5825,26 @@ function updateTablePropertiesDraft(nextDraft: { rows?: number; cols?: number })
   }
 }
 
+function updateTablePropertiesHoverPreview(
+  nextPreview: { rows?: number; cols?: number } | null
+): void {
+  const fallbackRows =
+    tablePropertiesDraft?.rows ?? activeTableToolState?.rowCount ?? 2;
+  const fallbackCols =
+    tablePropertiesDraft?.cols ?? activeTableToolState?.colCount ?? 1;
+
+  tablePropertiesHoverPreview = nextPreview
+    ? {
+        rows: Math.max(2, Math.floor(nextPreview.rows ?? fallbackRows)),
+        cols: Math.max(1, Math.floor(nextPreview.cols ?? fallbackCols))
+      }
+    : null;
+
+  if (tableToolPropertiesOpen) {
+    renderTableToolPropertiesContent();
+  }
+}
+
 function attachTablePropertiesPointerGuard(
   element: HTMLElement,
   role: 'panel' | 'grid-cell' | 'number-input' | 'apply-button' | 'align-button',
@@ -5894,6 +5917,10 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
 
   const grid = document.createElement('div');
   grid.className = 'table-size-grid';
+  attachTablePropertiesPointerGuard(grid, 'panel');
+  grid.addEventListener('pointerleave', () => {
+    updateTablePropertiesHoverPreview(null);
+  });
   const gridCells: Array<{ row: number; col: number; element: HTMLButtonElement }> = [];
 
   for (let row = 2; row <= 9; row += 1) {
@@ -5903,7 +5930,11 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
       cell.className = 'table-size-grid-cell';
       attachTablePropertiesPointerGuard(cell, 'grid-cell', { preventDefault: true });
       cell.setAttribute('aria-label', `${row} x ${col}`);
+      cell.addEventListener('pointerenter', () => {
+        updateTablePropertiesHoverPreview({ rows: row, cols: col });
+      });
       cell.addEventListener('click', () => {
+        updateTablePropertiesHoverPreview(null);
         updateTablePropertiesDraft({ rows: row, cols: col });
       });
       gridCells.push({ row, col, element: cell });
@@ -5978,6 +6009,7 @@ function ensureTableToolPropertiesControls(): TableToolPropertiesControls | null
 
   const controls: TableToolPropertiesControls = {
     sizeLabel,
+    grid,
     gridCells,
     rowsInput,
     colsInput,
@@ -6001,22 +6033,32 @@ function renderTableToolPropertiesContent(): void {
     return;
   }
 
-  const draft = tablePropertiesDraft ?? {
-    rows: activeTableToolState.rowCount,
-    cols: activeTableToolState.colCount
-  };
+  const displaySize = resolveTablePropertiesDisplaySize({
+    hoverPreview: tablePropertiesHoverPreview,
+    draft: tablePropertiesDraft,
+    actualRows: activeTableToolState.rowCount,
+    actualCols: activeTableToolState.colCount
+  });
   controls.sizeLabel.textContent = TABLE_PROPERTIES_SIZE_LABEL;
   if (document.activeElement !== controls.rowsInput) {
-    controls.rowsInput.value = String(draft.rows);
+    controls.rowsInput.value = String(displaySize.rows);
   }
   if (document.activeElement !== controls.colsInput) {
-    controls.colsInput.value = String(draft.cols);
+    controls.colsInput.value = String(displaySize.cols);
   }
   controls.applyButton.textContent = TABLE_PROPERTIES_APPLY_LABEL;
   controls.alignmentLabel.textContent = TABLE_PROPERTIES_ALIGNMENT_LABEL;
 
   for (const { row, col, element } of controls.gridCells) {
-    element.classList.toggle('is-selected', row <= draft.rows && col <= draft.cols);
+    const isDisplayed = row <= displaySize.rows && col <= displaySize.cols;
+    const isCommitted = row <= (tablePropertiesDraft?.rows ?? activeTableToolState.rowCount)
+      && col <= (tablePropertiesDraft?.cols ?? activeTableToolState.colCount);
+    const isPreviewed = !!tablePropertiesHoverPreview && isDisplayed;
+    const isPreviewAnchor =
+      tablePropertiesHoverPreview?.rows === row && tablePropertiesHoverPreview?.cols === col;
+    element.classList.toggle('is-selected', isCommitted);
+    element.classList.toggle('is-previewed', isPreviewed);
+    element.classList.toggle('is-preview-anchor', !!isPreviewAnchor);
   }
 
   for (const alignment of ['left', 'center', 'right'] as const) {
@@ -6033,6 +6075,7 @@ function setTableToolMenuOpen(nextOpen: boolean): void {
   if (nextOpen) {
     tableToolPropertiesOpen = false;
     tablePropertiesDraft = null;
+    tablePropertiesHoverPreview = null;
   }
   syncTableToolOverlayVisibility();
 }
@@ -6048,6 +6091,7 @@ function setTableToolPropertiesOpen(nextOpen: boolean): void {
   if (tableToolPropertiesOpen) {
     tableToolMenuOpen = false;
     if (activeTableToolState && transition.initializeDraft) {
+      tablePropertiesHoverPreview = null;
       tablePropertiesDraft = resolveTablePropertiesDraft({
         previousDraft: tablePropertiesDraft,
         previousTableStart: activeTableToolState.tableStart,
@@ -6059,6 +6103,7 @@ function setTableToolPropertiesOpen(nextOpen: boolean): void {
     }
   } else {
     tablePropertiesDraft = null;
+    tablePropertiesHoverPreview = null;
   }
 
   if (tableToolPropertiesOpen) {
@@ -6100,6 +6145,7 @@ function handleTableToolWindowPointerDown(event: PointerEvent): void {
 function clearTableToolOverlay(): void {
   activeTableToolState = null;
   tablePropertiesDraft = null;
+  tablePropertiesHoverPreview = null;
   tableToolMenuOpen = false;
   tableToolPropertiesOpen = false;
 
@@ -6204,6 +6250,9 @@ function renderTableToolOverlay(documentId: string): void {
     actualCols: nextState.colCount,
     preserveExisting: tableToolPropertiesOpen
   });
+  if (activeTableToolState?.tableStart !== nextState.tableStart) {
+    tablePropertiesHoverPreview = null;
+  }
 
   activeTableToolState = nextState;
 

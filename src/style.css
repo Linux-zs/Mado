@@ -1337,11 +1337,33 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border: 1px solid rgba(154, 115, 69, 0.16);
   border-radius: 3px;
   background: rgba(255, 252, 245, 0.96);
+  box-shadow: inset 0 0 0 0 rgba(154, 115, 69, 0);
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
   cursor: pointer;
 }
 
 .table-size-grid-cell.is-selected {
   background: rgba(154, 115, 69, 0.72);
+  border-color: rgba(154, 115, 69, 0.36);
+}
+
+.table-size-grid-cell.is-previewed {
+  background: rgba(194, 159, 111, 0.5);
+  border-color: rgba(154, 115, 69, 0.28);
+  transform: translateY(-1px);
+}
+
+.table-size-grid-cell.is-selected.is-previewed {
+  background: rgba(176, 137, 88, 0.76);
+}
+
+.table-size-grid-cell.is-preview-anchor {
+  border-color: rgba(154, 115, 69, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(255, 248, 236, 0.88);
 }
 
 .table-properties-size-controls,

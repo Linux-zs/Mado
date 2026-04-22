@@ -67,6 +67,32 @@ export function shouldReuseTablePropertiesControls(input: {
   return input.hasCachedControls && input.controlsConnected && input.controlsInsidePanel;
 }
 
+export function resolveTablePropertiesDisplaySize(input: {
+  hoverPreview: { rows: number; cols: number } | null;
+  draft: { rows: number; cols: number } | null;
+  actualRows: number;
+  actualCols: number;
+}): { rows: number; cols: number } {
+  if (input.hoverPreview) {
+    return {
+      rows: Math.max(MIN_TABLE_ROWS, Math.floor(input.hoverPreview.rows)),
+      cols: Math.max(MIN_TABLE_COLS, Math.floor(input.hoverPreview.cols))
+    };
+  }
+
+  if (input.draft) {
+    return {
+      rows: Math.max(MIN_TABLE_ROWS, Math.floor(input.draft.rows)),
+      cols: Math.max(MIN_TABLE_COLS, Math.floor(input.draft.cols))
+    };
+  }
+
+  return {
+    rows: Math.max(MIN_TABLE_ROWS, Math.floor(input.actualRows)),
+    cols: Math.max(MIN_TABLE_COLS, Math.floor(input.actualCols))
+  };
+}
+
 export function resolveTableResizePlan(input: {
   currentRows: number;
   currentCols: number;

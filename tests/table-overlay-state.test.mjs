@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   isTablePropertiesInteractionRole,
+  resolveTablePropertiesDisplaySize,
   resolveTablePropertiesPanelTransition,
   TABLE_ALIGNMENT_BUTTON_LABELS,
   TABLE_PROPERTIES_ALIGNMENT_LABEL,
@@ -202,5 +203,46 @@ test('shouldReuseTablePropertiesControls rejects detached cached controls', () =
       controlsInsidePanel: false
     }),
     false
+  );
+});
+
+test('resolveTablePropertiesDisplaySize prefers hover preview over draft and actual size', () => {
+  assert.deepEqual(
+    resolveTablePropertiesDisplaySize({
+      hoverPreview: { rows: 6, cols: 3 },
+      draft: { rows: 4, cols: 2 },
+      actualRows: 3,
+      actualCols: 2
+    }),
+    {
+      rows: 6,
+      cols: 3
+    }
+  );
+
+  assert.deepEqual(
+    resolveTablePropertiesDisplaySize({
+      hoverPreview: null,
+      draft: { rows: 4, cols: 2 },
+      actualRows: 3,
+      actualCols: 2
+    }),
+    {
+      rows: 4,
+      cols: 2
+    }
+  );
+
+  assert.deepEqual(
+    resolveTablePropertiesDisplaySize({
+      hoverPreview: null,
+      draft: null,
+      actualRows: 3,
+      actualCols: 2
+    }),
+    {
+      rows: 3,
+      cols: 2
+    }
   );
 });
