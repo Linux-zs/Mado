@@ -4788,6 +4788,8 @@ function setOutlineSidebarEmptyState(text: string): void {
   outlineSidebarEmpty.hidden = false;
   outlineSidebarEmpty.textContent = text;
   outlineSidebarList.hidden = true;
+  outlineSidebarList.replaceChildren();
+  outlineItemNodeCache.clear();
 }
 
 function reconcileKeyedChildren<T, E extends HTMLElement>(

@@ -864,7 +864,6 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .file-tree-row.is-active {
   background: var(--tree-active-bg);
-  color: var(--color-hover-strong);
 }
 
 .file-tree-row.is-active::before {
@@ -1029,12 +1028,12 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .outline-list {
-  gap: 1px;
+  gap: 2px;
 }
 
 .outline-item {
   width: 100%;
-  padding: 4px 10px;
+  padding: 5px 10px;
   border: 0;
   border-radius: 10px;
   background: transparent;
@@ -1042,7 +1041,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   font-family: var(--font-ui);
   text-align: left;
   font-size: 16px;
-  line-height: 1.22;
+  line-height: 1.28;
   cursor: pointer;
   transition:
     background var(--motion-fast) var(--motion-ease),

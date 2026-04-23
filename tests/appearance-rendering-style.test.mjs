@@ -116,13 +116,14 @@ test('text-heavy panels avoid opacity and transform transitions', () => {
 });
 
 test('sidebar file tree and outline use enlarged compact typography', () => {
+  assert.doesNotMatch(getExactRuleBody('.file-tree-row.is-active'), /\bcolor\s*:/);
   assert.match(getExactRuleBody('.file-tree-label'), /font-size:\s*15px;/);
   assert.match(getExactRuleBody('.file-tree-row.is-root .file-tree-label'), /font-size:\s*14px;/);
 
   const outlineListRule = getLastRuleBody('.outline-list');
   const outlineItemRule = getExactRuleBody('.outline-item');
-  assert.match(outlineListRule, /gap:\s*1px;/);
-  assert.match(outlineItemRule, /padding:\s*4px 10px;/);
+  assert.match(outlineListRule, /gap:\s*2px;/);
+  assert.match(outlineItemRule, /padding:\s*5px 10px;/);
   assert.match(outlineItemRule, /font-size:\s*16px;/);
-  assert.match(outlineItemRule, /line-height:\s*1\.22;/);
+  assert.match(outlineItemRule, /line-height:\s*1\.28;/);
 });
