@@ -12,6 +12,12 @@
   --font-body: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-heading: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-code: Consolas, 'Cascadia Code', 'Microsoft YaHei UI', monospace;
+  --font-body-size: 18px;
+  --font-body-weight: 400;
+  --font-body-style: normal;
+  --font-code-size: 13px;
+  --font-code-weight: 400;
+  --font-code-style: normal;
   --color-app-bg: #f3efe7;
   --color-body-gradient-start: #fbf9f5;
   --color-body-gradient-mid: #f2ede4;
@@ -693,6 +699,91 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border-bottom: 1px solid var(--color-border-soft);
 }
 
+.appearance-font-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--color-border-soft);
+  background: var(--color-header-surface);
+}
+
+.appearance-font-bar.is-hidden {
+  display: none;
+}
+
+.appearance-font-slot-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.appearance-font-slot-tab {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(60, 49, 35, 0.12);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: 500 13px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.appearance-font-slot-tab.is-active {
+  background: var(--color-hover-surface);
+  color: var(--color-hover-strong);
+}
+
+.appearance-font-controls {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.appearance-font-select {
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid rgba(60, 49, 35, 0.12);
+  border-radius: 8px;
+  background: var(--color-input-surface);
+  color: var(--color-editor-text);
+  font: 13px/1 var(--font-ui);
+}
+
+.appearance-font-family-select {
+  flex: 1 1 240px;
+}
+
+.appearance-font-style-select {
+  flex: 0 0 150px;
+}
+
+.appearance-font-size-select {
+  flex: 0 0 88px;
+}
+
+.appearance-font-close {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: 500 12px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.appearance-font-close:hover:not(:disabled) {
+  background: var(--color-hover-surface);
+  color: var(--color-hover-strong);
+}
+
 .find-replace-bar {
   display: flex;
   align-items: center;
@@ -836,7 +927,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   scrollbar-color: rgba(72, 64, 54, 0.42) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  font: 13px/1.72 var(--font-code);
+  font: var(--font-code-style) var(--font-code-weight) var(--font-code-size)/1.72 var(--font-code);
   white-space: pre;
   word-break: normal;
   overflow-wrap: normal;
@@ -881,7 +972,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   min-height: 100%;
   outline: none;
   word-break: break-word;
-  font: 18px/1.78 var(--font-body);
+  font: var(--font-body-style) var(--font-body-weight) var(--font-body-size)/1.78 var(--font-body);
 }
 
 .milkdown-host .ProseMirror > *:first-child {
@@ -1171,7 +1262,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border-radius: 6px;
   background: rgba(142, 113, 74, 0.12);
   color: #6f3f22;
-  font: 0.92em/1.4 var(--font-code);
+  font: var(--font-code-style) var(--font-code-weight) 0.92em/1.4 var(--font-code);
 }
 
 .milkdown-host .ProseMirror pre {
@@ -1430,7 +1521,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   background: transparent;
   color: var(--color-source-text);
   white-space: pre;
-  font: 13px/1.72 var(--font-code);
+  font: var(--font-code-style) var(--font-code-weight) var(--font-code-size)/1.72 var(--font-code);
 }
 
 .milkdown-host .ProseMirror pre.code-block-highlighted code {
@@ -1585,7 +1676,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font: 18px/1.76 var(--font-body);
+  font: var(--font-body-style) var(--font-body-weight) var(--font-body-size)/1.76 var(--font-body);
   color: var(--color-editor-paragraph);
 }
 

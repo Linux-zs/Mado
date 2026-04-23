@@ -25,7 +25,20 @@ function getRuleBody(selector) {
 }
 
 test('editor body text uses 18px baseline while source editor remains unchanged', () => {
-  assert.match(getRuleBody('.milkdown-host .ProseMirror'), /font:\s*18px\/1\.78 var\(--font-body\);/);
-  assert.match(getRuleBody('.viewer-line'), /font:\s*18px\/1\.76 var\(--font-body\);/);
-  assert.match(getRuleBody('.source-editor'), /font:\s*13px\/1\.72 var\(--font-code\);/);
+  const rootRule = getRuleBody(':root');
+
+  assert.match(rootRule, /--font-body-size:\s*18px;/);
+  assert.match(rootRule, /--font-code-size:\s*13px;/);
+  assert.match(
+    getRuleBody('.milkdown-host .ProseMirror'),
+    /font:\s*var\(--font-body-style\)\s*var\(--font-body-weight\)\s*var\(--font-body-size\)\/1\.78 var\(--font-body\);/
+  );
+  assert.match(
+    getRuleBody('.viewer-line'),
+    /font:\s*var\(--font-body-style\)\s*var\(--font-body-weight\)\s*var\(--font-body-size\)\/1\.76 var\(--font-body\);/
+  );
+  assert.match(
+    getRuleBody('.source-editor'),
+    /font:\s*var\(--font-code-style\)\s*var\(--font-code-weight\)\s*var\(--font-code-size\)\/1\.72 var\(--font-code\);/
+  );
 });

@@ -61,9 +61,12 @@ import {
   normalizeAppearanceSettings,
   resolveAppearanceDisplayTheme,
   resolveAppearanceFontStack,
+  resolveAppearanceTypographyStyle,
   type AppearanceFontSelection,
   type AppearanceSettings,
-  type AppearanceTheme
+  type AppearanceTheme,
+  type AppearanceTypography,
+  type AppearanceTypographyStyle
 } from './appearance-state';
 import {
   createDefaultEditorScalePercent,
@@ -524,6 +527,18 @@ const TEXT_FILE_SCAN_DISPLAY_LIMIT = 2000;
 const MARKDOWN_SYNC_FIDELITY_BLOCK_LIMIT = 160;
 const MARKDOWN_SYNC_FIDELITY_LENGTH_LIMIT = 120_000;
 const OUTLINE_SIDEBAR_REFRESH_DELAY_MS = 80;
+const APPEARANCE_FONT_SIZE_OPTIONS = Array.from({ length: 27 }, (_, index) => index + 10);
+const APPEARANCE_FONT_STYLE_LABELS: Record<AppearanceTypographyStyle, string> = {
+  normal: 'Normal',
+  bold: 'Bold',
+  italic: 'Italic',
+  boldItalic: 'Bold Italic'
+};
+const APPEARANCE_FONT_PANEL_SLOT_LABELS: Record<AppearanceFontPanelSlot, string> = {
+  cjk: '\u4e2d\u6587',
+  latin: '\u82f1\u6587',
+  code: '\u4ee3\u7801'
+};
 const HEADING_LEVEL_LABELS = [
   '\u4e00\u7ea7\u6807\u9898',
   '\u4e8c\u7ea7\u6807\u9898',
@@ -592,9 +607,10 @@ type AppCommandPayload =
   | { type: 'clearRecentFiles' }
   | { type: 'openRecentFile'; path: string }
   | { type: 'setAppearanceTheme'; theme: AppearanceTheme }
-  | { type: 'setAppearanceFont'; slot: 'cjk' | 'latin' | 'code'; font: AppearanceFontSelection }
+  | { type: 'openAppearanceFontPanel'; slot: 'cjk' | 'latin' | 'code' }
   | { type: 'editCommand'; commandId: EditCommandId }
   | { type: 'editorCommand'; commandId: string };
+type AppearanceFontPanelSlot = keyof AppearanceSettings['fonts'];
 type MilkdownCtxAccessor = {
   get: <T>(slice: unknown) => T;
 };
@@ -644,6 +660,11 @@ let recentFilesMenuSyncInFlight = false;
 let recentFilesStorageErrorShown = false;
 let recentFilesMenuSyncErrorShown = false;
 let appearanceSettings = loadAppearanceSettings();
+let appearanceFontFamilies: string[] = [];
+let appearanceFontFamiliesLoading = false;
+let appearanceFontFamiliesLoadPromise: Promise<string[]> | null = null;
+let appearanceFontPanelOpen = false;
+let appearanceFontPanelActiveSlot: AppearanceFontPanelSlot = 'cjk';
 let editorScalePercent = loadEditorScalePercent();
 let currentDirectoryPath = loadCurrentDirectoryPath();
 let directoryFiles: DirectoryFileEntry[] = [];
@@ -909,6 +930,90 @@ fileHint.className = 'viewer-hint';
 fileHint.textContent =
   '\u4ece "\u6587\u4ef6 -> \u6253\u5f00" \u9009\u62e9\u4e00\u4e2a Markdown \u6587\u4ef6\u3002';
 
+const appearanceFontBar = document.createElement('section');
+appearanceFontBar.className = 'appearance-font-bar is-hidden';
+appearanceFontBar.setAttribute('aria-label', 'Appearance font controls');
+
+const appearanceFontSlotTabs = document.createElement('div');
+appearanceFontSlotTabs.className = 'appearance-font-slot-tabs';
+
+const appearanceFontSlotButtons = new Map<AppearanceFontPanelSlot, HTMLButtonElement>();
+for (const slot of ['cjk', 'latin', 'code'] as const) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'appearance-font-slot-tab';
+  button.textContent = APPEARANCE_FONT_PANEL_SLOT_LABELS[slot];
+  button.addEventListener('click', () => {
+    appearanceFontPanelActiveSlot = slot;
+    renderAppearanceFontBar();
+  });
+  appearanceFontSlotButtons.set(slot, button);
+  appearanceFontSlotTabs.append(button);
+}
+
+const appearanceFontControls = document.createElement('div');
+appearanceFontControls.className = 'appearance-font-controls';
+
+const appearanceFontFamilySelect = document.createElement('select');
+appearanceFontFamilySelect.className = 'appearance-font-select appearance-font-family-select';
+appearanceFontFamilySelect.setAttribute('aria-label', 'Font family');
+
+const appearanceFontStyleSelect = document.createElement('select');
+appearanceFontStyleSelect.className = 'appearance-font-select appearance-font-style-select';
+appearanceFontStyleSelect.setAttribute('aria-label', 'Font style');
+
+for (const style of Object.keys(APPEARANCE_FONT_STYLE_LABELS) as AppearanceTypographyStyle[]) {
+  const option = document.createElement('option');
+  option.value = style;
+  option.textContent = APPEARANCE_FONT_STYLE_LABELS[style];
+  appearanceFontStyleSelect.append(option);
+}
+
+const appearanceFontSizeSelect = document.createElement('select');
+appearanceFontSizeSelect.className = 'appearance-font-select appearance-font-size-select';
+appearanceFontSizeSelect.setAttribute('aria-label', 'Font size');
+
+for (const size of APPEARANCE_FONT_SIZE_OPTIONS) {
+  const option = document.createElement('option');
+  option.value = String(size);
+  option.textContent = String(size);
+  appearanceFontSizeSelect.append(option);
+}
+
+const appearanceFontClose = document.createElement('button');
+appearanceFontClose.type = 'button';
+appearanceFontClose.className = 'appearance-font-close';
+appearanceFontClose.setAttribute('aria-label', 'Close font controls');
+appearanceFontClose.textContent = '\u5173\u95ed';
+
+appearanceFontControls.append(
+  appearanceFontFamilySelect,
+  appearanceFontStyleSelect,
+  appearanceFontSizeSelect,
+  appearanceFontClose
+);
+appearanceFontBar.append(appearanceFontSlotTabs, appearanceFontControls);
+
+appearanceFontFamilySelect.addEventListener('change', () => {
+  setAppearanceFont(appearanceFontPanelActiveSlot, appearanceFontFamilySelect.value);
+});
+
+appearanceFontStyleSelect.addEventListener('change', () => {
+  setAppearanceTypography(appearanceFontPanelActiveSlot, {
+    style: appearanceFontStyleSelect.value as AppearanceTypographyStyle
+  });
+});
+
+appearanceFontSizeSelect.addEventListener('change', () => {
+  setAppearanceTypography(appearanceFontPanelActiveSlot, {
+    sizePx: Number(appearanceFontSizeSelect.value)
+  });
+});
+
+appearanceFontClose.addEventListener('click', () => {
+  closeAppearanceFontPanel();
+});
+
 const content = document.createElement('div');
 content.className = 'viewer-content viewer-content-empty';
 content.tabIndex = 0;
@@ -1101,7 +1206,7 @@ contextSubmenuPanel.setAttribute('role', 'menu');
 contextMenuLayer.append(contextMenuPanel, contextSubmenuPanel);
 
 header.append(fileName, fileHint);
-editorPanel.append(header, findReplaceBar, content, statusBar);
+editorPanel.append(header, appearanceFontBar, findReplaceBar, content, statusBar);
 frame.append(sidebar, workspaceResizeHandle, editorPanel);
 shell.append(frame, contextMenuLayer, renameOverlay, deleteConfirmOverlay);
 app.replaceChildren(shell);
@@ -1119,6 +1224,7 @@ colorSchemeMediaQuery.addEventListener('change', () => {
 });
 renderFindReplaceBar();
 renderStatusBar();
+renderAppearanceFontBar();
 scheduleNativeMenuStateSync();
 window.requestAnimationFrame(() => {
   clampSidebarWidthToWorkspace();
@@ -1390,6 +1496,12 @@ window.addEventListener('wheel', handleEditorScaleWheel, { passive: false });
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    if (appearanceFontPanelOpen) {
+      closeAppearanceFontPanel();
+      event.stopPropagation();
+      return;
+    }
+
     if (contextMenuOpen) {
       closeContextMenu();
       event.stopPropagation();
@@ -1413,6 +1525,14 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener(
   'pointerdown',
   (event) => {
+    if (
+      appearanceFontPanelOpen &&
+      !isAppearanceFontPanelEventTarget(event.target) &&
+      !isContextMenuEventTarget(event.target)
+    ) {
+      closeAppearanceFontPanel();
+    }
+
     if (contextMenuOpen && !isContextMenuEventTarget(event.target)) {
       closeContextMenu();
     }
@@ -2685,6 +2805,101 @@ function loadAppearanceSettings(): AppearanceSettings {
   }
 }
 
+function getAppearanceFontFamiliesForSelect(
+  currentFamily: AppearanceFontSelection
+): { value: string; label: string }[] {
+  const families = [...appearanceFontFamilies];
+
+  if (currentFamily !== 'system' && !families.includes(currentFamily)) {
+    families.unshift(currentFamily);
+  }
+
+  return [{ value: 'system', label: '\u7cfb\u7edf\u5b57\u4f53' }].concat(
+    families.map((family) => ({ value: family, label: family }))
+  );
+}
+
+async function ensureAppearanceFontFamilies(): Promise<string[]> {
+  if (appearanceFontFamilies.length > 0) {
+    return appearanceFontFamilies;
+  }
+
+  if (appearanceFontFamiliesLoadPromise) {
+    return appearanceFontFamiliesLoadPromise;
+  }
+
+  appearanceFontFamiliesLoading = true;
+  renderAppearanceFontBar();
+  appearanceFontFamiliesLoadPromise = invoke<string[]>('list_installed_font_families')
+    .then((families) => {
+      appearanceFontFamilies = Array.isArray(families) ? families.filter((item) => item.trim().length > 0) : [];
+      return appearanceFontFamilies;
+    })
+    .catch((error) => {
+      console.error('Failed to load installed font families.', error);
+      showHeaderNotice('\u5b57\u4f53\u5217\u8868\u52a0\u8f7d\u5931\u8d25\u3002', true);
+      appearanceFontFamilies = [];
+      return appearanceFontFamilies;
+    })
+    .finally(() => {
+      appearanceFontFamiliesLoading = false;
+      appearanceFontFamiliesLoadPromise = null;
+      renderAppearanceFontBar();
+    });
+
+  return appearanceFontFamiliesLoadPromise;
+}
+
+function getAppearanceTypographyForSlot(slot: AppearanceFontPanelSlot): AppearanceTypography {
+  return slot === 'code' ? appearanceSettings.codeTypography : appearanceSettings.bodyTypography;
+}
+
+function renderAppearanceFontBar(): void {
+  appearanceFontBar.classList.toggle('is-hidden', !appearanceFontPanelOpen);
+
+  if (!appearanceFontPanelOpen) {
+    return;
+  }
+
+  for (const [slot, button] of appearanceFontSlotButtons) {
+    button.classList.toggle('is-active', slot === appearanceFontPanelActiveSlot);
+  }
+
+  const currentFamily = appearanceSettings.fonts[appearanceFontPanelActiveSlot];
+  const familyOptions = getAppearanceFontFamiliesForSelect(currentFamily);
+
+  appearanceFontFamilySelect.replaceChildren(
+    ...familyOptions.map((option) => {
+      const element = document.createElement('option');
+      element.value = option.value;
+      element.textContent = option.label;
+      return element;
+    })
+  );
+  appearanceFontFamilySelect.value = currentFamily;
+  appearanceFontFamilySelect.disabled = appearanceFontFamiliesLoading;
+
+  const typography = getAppearanceTypographyForSlot(appearanceFontPanelActiveSlot);
+  appearanceFontStyleSelect.value = typography.style;
+  appearanceFontSizeSelect.value = String(typography.sizePx);
+}
+
+function closeAppearanceFontPanel(): void {
+  if (!appearanceFontPanelOpen) {
+    return;
+  }
+
+  appearanceFontPanelOpen = false;
+  renderAppearanceFontBar();
+}
+
+async function openAppearanceFontPanel(slot: AppearanceFontPanelSlot): Promise<void> {
+  appearanceFontPanelActiveSlot = slot;
+  appearanceFontPanelOpen = true;
+  renderAppearanceFontBar();
+  void ensureAppearanceFontFamilies();
+}
+
 function loadEditorScalePercent(): number {
   try {
     const stored = window.localStorage.getItem(EDITOR_SCALE_STORAGE_KEY);
@@ -2749,15 +2964,17 @@ function applyAppearanceSettings(): void {
     colorSchemeMediaQuery.matches
   );
   const root = document.documentElement;
+  const bodyTypography = resolveAppearanceTypographyStyle(appearanceSettings.bodyTypography.style);
+  const codeTypography = resolveAppearanceTypographyStyle(appearanceSettings.codeTypography.style);
   const uiFontStack = resolveAppearanceFontStack({
     latin: appearanceSettings.fonts.latin,
     cjk: appearanceSettings.fonts.cjk,
-    fallback: ['"Segoe UI"', '"Microsoft YaHei UI"', 'sans-serif']
+    fallback: ['"Microsoft YaHei UI"', '"Segoe UI"', '"PingFang SC"', '"Noto Sans CJK SC"', 'sans-serif']
   });
   const bodyFontStack = resolveAppearanceFontStack({
     latin: appearanceSettings.fonts.latin,
     cjk: appearanceSettings.fonts.cjk,
-    fallback: ['Georgia', '"Times New Roman"', '"Microsoft YaHei UI"', 'serif']
+    fallback: ['"Microsoft YaHei UI"', '"Segoe UI"', '"PingFang SC"', '"Noto Sans CJK SC"', 'sans-serif']
   });
   const codeFontStack = resolveAppearanceFontStack({
     latin: appearanceSettings.fonts.code,
@@ -2771,6 +2988,12 @@ function applyAppearanceSettings(): void {
   root.style.setProperty('--font-body', bodyFontStack);
   root.style.setProperty('--font-heading', bodyFontStack);
   root.style.setProperty('--font-code', codeFontStack);
+  root.style.setProperty('--font-body-size', `${appearanceSettings.bodyTypography.sizePx}px`);
+  root.style.setProperty('--font-body-weight', bodyTypography.fontWeight);
+  root.style.setProperty('--font-body-style', bodyTypography.fontStyle);
+  root.style.setProperty('--font-code-size', `${appearanceSettings.codeTypography.sizePx}px`);
+  root.style.setProperty('--font-code-weight', codeTypography.fontWeight);
+  root.style.setProperty('--font-code-style', codeTypography.fontStyle);
 }
 
 function setAppearanceTheme(theme: AppearanceTheme): void {
@@ -2781,6 +3004,7 @@ function setAppearanceTheme(theme: AppearanceTheme): void {
   applyAppearanceSettings();
   persistAppearanceSettings();
   syncAppearanceMenuState();
+  renderAppearanceFontBar();
 }
 
 function setAppearanceFont(
@@ -2796,7 +3020,33 @@ function setAppearanceFont(
   });
   applyAppearanceSettings();
   persistAppearanceSettings();
-  syncAppearanceMenuState();
+  renderAppearanceFontBar();
+}
+
+function setAppearanceTypography(
+  slot: AppearanceFontPanelSlot,
+  nextTypography: Partial<AppearanceTypography>
+): void {
+  appearanceSettings = normalizeAppearanceSettings(
+    slot === 'code'
+      ? {
+          ...appearanceSettings,
+          codeTypography: {
+            ...appearanceSettings.codeTypography,
+            ...nextTypography
+          }
+        }
+      : {
+          ...appearanceSettings,
+          bodyTypography: {
+            ...appearanceSettings.bodyTypography,
+            ...nextTypography
+          }
+        }
+  );
+  applyAppearanceSettings();
+  persistAppearanceSettings();
+  renderAppearanceFontBar();
 }
 
 function loadRecentFiles(): RecentFileEntry[] {
@@ -7099,6 +7349,11 @@ function getShortcutTargetKind(target: EventTarget | null): ShortcutTargetKind {
   return 'other';
 }
 
+function isAppearanceFontPanelEventTarget(target: EventTarget | null): boolean {
+  const element = getShortcutEventTargetElement(target);
+  return Boolean(element && appearanceFontBar.contains(element));
+}
+
 function isTargetWithinAppShell(target: EventTarget | null): boolean {
   const element = getShortcutEventTargetElement(target);
   return Boolean(app && element && app.contains(element));
@@ -7283,12 +7538,8 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
       return typeof candidate.path === 'string' && candidate.path.length > 0;
     case 'setAppearanceTheme':
       return candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark';
-    case 'setAppearanceFont':
-      return (
-        (candidate.slot === 'cjk' || candidate.slot === 'latin' || candidate.slot === 'code') &&
-        typeof candidate.font === 'string' &&
-        candidate.font.trim().length > 0
-      );
+    case 'openAppearanceFontPanel':
+      return candidate.slot === 'cjk' || candidate.slot === 'latin' || candidate.slot === 'code';
     case 'editCommand':
       return (
         (candidate.commandId === 'undo' ||
@@ -7451,9 +7702,16 @@ async function dispatchAppCommand(
     return;
   }
 
-  if (source === 'native-menu' && (command.type === 'editCommand' || command.type === 'editorCommand')) {
+  if (
+    source === 'native-menu' &&
+    (command.type === 'editCommand' ||
+      command.type === 'editorCommand' ||
+      command.type === 'openAppearanceFontPanel')
+  ) {
     await waitForNativeMenuToClose();
-    focusActiveCommandContext();
+    if (command.type === 'editCommand' || command.type === 'editorCommand') {
+      focusActiveCommandContext();
+    }
   }
 
   switch (command.type) {
@@ -7494,8 +7752,8 @@ async function dispatchAppCommand(
     case 'setAppearanceTheme':
       setAppearanceTheme(command.theme);
       return;
-    case 'setAppearanceFont':
-      setAppearanceFont(command.slot, command.font);
+    case 'openAppearanceFontPanel':
+      await openAppearanceFontPanel(command.slot);
       return;
     case 'editCommand':
       executeEditCommand(command.commandId);

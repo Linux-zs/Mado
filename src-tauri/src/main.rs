@@ -40,8 +40,10 @@ const MENU_RECENT_FILE_PREFIX: &str = "file-recent-open:";
 const MENU_APPEARANCE_THEME_SYSTEM_ID: &str = "appearance-theme:system";
 const MENU_APPEARANCE_THEME_LIGHT_ID: &str = "appearance-theme:light";
 const MENU_APPEARANCE_THEME_DARK_ID: &str = "appearance-theme:dark";
-const MENU_APPEARANCE_FONT_PREFIX: &str = "appearance-font:";
-const APPEARANCE_FONT_SYSTEM_VALUE: &str = "system";
+const MENU_APPEARANCE_FONT_PANEL_PREFIX: &str = "appearance-font-panel:";
+const MENU_APPEARANCE_FONT_PANEL_CJK_ID: &str = "appearance-font-panel:cjk";
+const MENU_APPEARANCE_FONT_PANEL_LATIN_ID: &str = "appearance-font-panel:latin";
+const MENU_APPEARANCE_FONT_PANEL_CODE_ID: &str = "appearance-font-panel:code";
 const RECENT_FILES_MENU_LIMIT: usize = 10;
 const APP_COMMAND_EVENT: &str = "request-app-command";
 const EDITOR_COMMAND_MENU_PREFIX: &str = "editor-command:";
@@ -92,25 +94,15 @@ enum AppCommandPayload {
   SetAppearanceTheme {
     theme: String,
   },
-  SetAppearanceFont {
+  OpenAppearanceFontPanel {
     slot: String,
-    font: String,
   },
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct AppearanceMenuFontsState {
-  cjk: String,
-  latin: String,
-  code: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct AppearanceMenuState {
   theme: String,
-  fonts: AppearanceMenuFontsState,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -272,6 +264,11 @@ fn update_menu_enabled_states(app: AppHandle, states: Vec<MenuEnabledState>) -> 
 #[tauri::command]
 fn update_appearance_menu_state(app: AppHandle, state: AppearanceMenuState) -> Result<(), String> {
   sync_appearance_menu_state(&app, &state).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_installed_font_families() -> Result<Vec<String>, String> {
+  Ok(list_installed_font_families_internal())
 }
 
 #[tauri::command]
@@ -1061,16 +1058,14 @@ fn check_menu_item<R: Runtime>(
     .build(app)
 }
 
-fn appearance_font_menu_item_id(slot: &str, font: &str) -> String {
-  format!("{MENU_APPEARANCE_FONT_PREFIX}{slot}:{}", urlencoding::encode(font))
+fn appearance_font_panel_menu_item_id(slot: &str) -> String {
+  format!("{MENU_APPEARANCE_FONT_PANEL_PREFIX}{slot}")
 }
 
-fn appearance_font_selection_from_menu_id(menu_id: &str) -> Option<(String, String)> {
-  let payload = menu_id.strip_prefix(MENU_APPEARANCE_FONT_PREFIX)?;
-  let (slot, encoded_font) = payload.split_once(':')?;
-  let font = urlencoding::decode(encoded_font).ok()?.into_owned();
-
-  Some((slot.to_string(), font))
+fn appearance_font_panel_slot_from_menu_id(menu_id: &str) -> Option<String> {
+  menu_id
+    .strip_prefix(MENU_APPEARANCE_FONT_PANEL_PREFIX)
+    .map(|slot| slot.to_string())
 }
 
 fn normalize_windows_font_menu_label(value_name: &str) -> Option<String> {
@@ -1095,6 +1090,54 @@ fn normalize_windows_font_menu_label(value_name: &str) -> Option<String> {
   Some(normalized.to_string())
 }
 
+fn normalize_windows_font_family_name(value_name: &str) -> Option<String> {
+  let label = normalize_windows_font_menu_label(value_name)?;
+  let mut tokens = label
+    .split_whitespace()
+    .map(str::to_string)
+    .collect::<Vec<String>>();
+  let removable_suffixes = [
+    "thin",
+    "extralight",
+    "ultralight",
+    "light",
+    "normal",
+    "regular",
+    "medium",
+    "semilight",
+    "demilight",
+    "semibold",
+    "demibold",
+    "bold",
+    "extrabold",
+    "ultrabold",
+    "black",
+    "heavy",
+    "italic",
+    "oblique",
+  ];
+
+  while let Some(last) = tokens.last() {
+    let normalized = last
+      .chars()
+      .filter(|character| character.is_ascii_alphanumeric())
+      .collect::<String>()
+      .to_lowercase();
+
+    if !removable_suffixes.contains(&normalized.as_str()) {
+      break;
+    }
+
+    tokens.pop();
+  }
+
+  if tokens.is_empty() {
+    return Some(label);
+  }
+
+  Some(tokens.join(" "))
+}
+
 #[cfg(windows)]
 fn extend_installed_font_names_from_registry(root: HKEY, fonts: &mut Vec<String>) {
   let hive = RegKey::predef(root);
@@ -1103,7 +1146,7 @@ fn extend_installed_font_names_from_registry(root: HKEY, fonts: &mut Vec<String>
   };
 
   for value_name in key.enum_values().flatten().map(|entry| entry.0) {
-    if let Some(label) = normalize_windows_font_menu_label(&value_name) {
+    if let Some(label) = normalize_windows_font_family_name(&value_name) {
       fonts.push(label);
     }
   }
@@ -1112,7 +1155,7 @@ fn extend_installed_font_names_from_registry(root: HKEY, fonts: &mut Vec<String>
 #[cfg(not(windows))]
 fn extend_installed_font_names_from_registry(_root: usize, _fonts: &mut Vec<String>) {}
 
-fn list_installed_font_names() -> Vec<String> {
+fn list_installed_font_families_internal() -> Vec<String> {
   let mut fonts = Vec::new();
 
   #[cfg(windows)]
@@ -1126,35 +1169,7 @@ fn list_installed_font_names() -> Vec<String> {
   fonts
 }
 
-fn build_appearance_font_submenu<R: Runtime>(
-  app: &AppHandle<R>,
-  label: &str,
-  slot: &str,
-  fonts: &[String],
-) -> tauri::Result<Submenu<R>> {
-  let mut builder = SubmenuBuilder::new(app, label)
-    .item(&check_menu_item(
-      app,
-      &appearance_font_menu_item_id(slot, APPEARANCE_FONT_SYSTEM_VALUE),
-      "\u{7cfb}\u{7edf}\u{5b57}\u{4f53}",
-      true,
-    )?)
-    .separator();
-
-  for font in fonts {
-    builder = builder.item(&check_menu_item(
-      app,
-      &appearance_font_menu_item_id(slot, font),
-      font,
-      false,
-    )?);
-  }
-
-  builder.build()
-}
-
 fn build_appearance_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
-  let fonts = list_installed_font_names();
   let theme_menu = SubmenuBuilder::new(app, "\u{4e3b}\u{9898}")
     .item(&check_menu_item(
       app,
@@ -1176,23 +1191,23 @@ fn build_appearance_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submen
     )?)
     .build()?;
   let fonts_menu = SubmenuBuilder::new(app, "\u{5b57}\u{4f53}")
-    .item(&build_appearance_font_submenu(
+    .item(&menu_item(
       app,
-      "\u{4e2d}\u{6587}\u{5b57}\u{4f53}",
-      "cjk",
-      &fonts,
+      &appearance_font_panel_menu_item_id("cjk"),
+      "\u{4e2d}\u{6587}\u{5b57}\u{4f53}...",
+      None,
     )?)
-    .item(&build_appearance_font_submenu(
+    .item(&menu_item(
       app,
-      "\u{82f1}\u{6587}\u{5b57}\u{4f53}",
-      "latin",
-      &fonts,
+      &appearance_font_panel_menu_item_id("latin"),
+      "\u{82f1}\u{6587}\u{5b57}\u{4f53}...",
+      None,
     )?)
-    .item(&build_appearance_font_submenu(
+    .item(&menu_item(
       app,
-      "\u{4ee3}\u{7801}\u{5b57}\u{4f53}",
-      "code",
-      &fonts,
+      &appearance_font_panel_menu_item_id("code"),
+      "\u{4ee3}\u{7801}\u{5b57}\u{4f53}...",
+      None,
     )?)
     .build()?;
 
@@ -1294,60 +1309,6 @@ fn sync_appearance_menu_state<R: Runtime>(
     ),
   ] {
     set_check_menu_item_checked(&menu_items, menu_id, is_checked)?;
-  }
-
-  for (slot, font) in [
-    ("cjk", state.fonts.cjk.as_str()),
-    ("latin", state.fonts.latin.as_str()),
-    ("code", state.fonts.code.as_str()),
-  ] {
-    let target_id = appearance_font_menu_item_id(slot, font);
-    let fallback_id = appearance_font_menu_item_id(slot, APPEARANCE_FONT_SYSTEM_VALUE);
-    let has_target = find_check_menu_item_by_id(menu_items.clone(), &target_id)?.is_some();
-
-    set_check_menu_item_checked(
-      &menu_items,
-      if has_target { &target_id } else { &fallback_id },
-      true,
-    )?;
-
-    if has_target {
-      set_check_menu_item_checked(&menu_items, &fallback_id, false)?;
-    } else {
-      set_check_menu_item_checked(&menu_items, &fallback_id, true)?;
-    }
-
-    for item in menu_items.clone() {
-      sync_appearance_font_check_item(slot, &target_id, &fallback_id, item)?;
-    }
-  }
-
-  Ok(())
-}
-
-fn sync_appearance_font_check_item<R: Runtime>(
-  slot: &str,
-  target_id: &str,
-  fallback_id: &str,
-  item: MenuItemKind<R>,
-) -> tauri::Result<()> {
-  match item {
-    MenuItemKind::Submenu(submenu) => {
-      for child in submenu.items()? {
-        sync_appearance_font_check_item(slot, target_id, fallback_id, child)?;
-      }
-    }
-    MenuItemKind::Check(check_item) => {
-      let id = check_item.id().as_ref();
-      if id.starts_with(MENU_APPEARANCE_FONT_PREFIX)
-        && appearance_font_selection_from_menu_id(id)
-          .map(|(item_slot, _)| item_slot == slot)
-          .unwrap_or(false)
-      {
-        check_item.set_checked(id == target_id || (id == fallback_id && target_id == fallback_id))?;
-      }
-    }
-    _ => {}
   }
 
   Ok(())
@@ -1736,6 +1697,15 @@ fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
     MENU_APPEARANCE_THEME_DARK_ID => Some(AppCommandPayload::SetAppearanceTheme {
       theme: "dark".to_string(),
     }),
+    MENU_APPEARANCE_FONT_PANEL_CJK_ID => Some(AppCommandPayload::OpenAppearanceFontPanel {
+      slot: "cjk".to_string(),
+    }),
+    MENU_APPEARANCE_FONT_PANEL_LATIN_ID => Some(AppCommandPayload::OpenAppearanceFontPanel {
+      slot: "latin".to_string(),
+    }),
+    MENU_APPEARANCE_FONT_PANEL_CODE_ID => Some(AppCommandPayload::OpenAppearanceFontPanel {
+      slot: "code".to_string(),
+    }),
     MENU_CLEAR_RECENT_FILES_ID => Some(AppCommandPayload::ClearRecentFiles),
     _ => None,
   }
@@ -1758,6 +1728,7 @@ fn main() {
       reveal_path_in_explorer,
       validate_markdown_file_name,
       validate_markdown_save_path,
+      list_installed_font_families,
       update_recent_files_menu,
       update_menu_enabled_states,
       update_appearance_menu_state
@@ -1786,8 +1757,8 @@ fn main() {
         return;
       }
 
-      if let Some((slot, font)) = appearance_font_selection_from_menu_id(menu_id) {
-        emit_app_command(app, AppCommandPayload::SetAppearanceFont { slot, font });
+      if let Some(slot) = appearance_font_panel_slot_from_menu_id(menu_id) {
+        emit_app_command(app, AppCommandPayload::OpenAppearanceFontPanel { slot });
         return;
       }
 
@@ -2376,11 +2347,10 @@ mod tests {
       theme: "dark".to_string(),
     })
     .expect("theme payload should serialize");
-    let font_value = serde_json::to_value(AppCommandPayload::SetAppearanceFont {
+    let panel_value = serde_json::to_value(AppCommandPayload::OpenAppearanceFontPanel {
       slot: "code".to_string(),
-      font: "Consolas".to_string(),
     })
-    .expect("font payload should serialize");
+    .expect("panel payload should serialize");
 
     assert_eq!(
       theme_value,
@@ -2390,11 +2360,10 @@ mod tests {
       })
     );
     assert_eq!(
-      font_value,
+      panel_value,
       json!({
-        "type": "setAppearanceFont",
-        "slot": "code",
-        "font": "Consolas"
+        "type": "openAppearanceFontPanel",
+        "slot": "code"
       })
     );
   }
@@ -2428,17 +2397,25 @@ mod tests {
       app_command_for_menu_id(MENU_APPEARANCE_THEME_DARK_ID),
       Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "dark"
     ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_CJK_ID),
+      Some(AppCommandPayload::OpenAppearanceFontPanel { slot }) if slot == "cjk"
+    ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_CODE_ID),
+      Some(AppCommandPayload::OpenAppearanceFontPanel { slot }) if slot == "code"
+    ));
 
     assert!(app_command_for_menu_id("missing-menu-id").is_none());
   }
 
   #[test]
-  fn appearance_font_menu_item_id_round_trips_slot_and_font() {
-    let menu_id = appearance_font_menu_item_id("latin", "Times New Roman");
-    let parsed =
-      appearance_font_selection_from_menu_id(&menu_id).expect("font menu id should round trip");
+  fn appearance_font_panel_menu_item_id_round_trips_slot() {
+    let menu_id = appearance_font_panel_menu_item_id("latin");
+    let parsed = appearance_font_panel_slot_from_menu_id(&menu_id)
+      .expect("font panel menu id should round trip");
 
-    assert_eq!(parsed, ("latin".to_string(), "Times New Roman".to_string()));
+    assert_eq!(parsed, "latin".to_string());
   }
 
   #[test]
@@ -2450,6 +2427,22 @@ mod tests {
     assert_eq!(
       normalize_windows_font_menu_label("@Malgun Gothic").as_deref(),
       None
+    );
+  }
+
+  #[test]
+  fn normalize_windows_font_family_name_strips_style_suffixes() {
+    assert_eq!(
+      normalize_windows_font_family_name("Maple Mono Normal ExtraBold").as_deref(),
+      Some("Maple Mono")
+    );
+    assert_eq!(
+      normalize_windows_font_family_name("Microsoft YaHei UI Light").as_deref(),
+      Some("Microsoft YaHei UI")
+    );
+    assert_eq!(
+      normalize_windows_font_family_name("Microsoft New Tai Lue").as_deref(),
+      Some("Microsoft New Tai Lue")
     );
   }
 }
