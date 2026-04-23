@@ -883,7 +883,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .file-tree-row.is-root .file-tree-label {
   color: var(--color-text-strong);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1012,7 +1012,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.32;
 }
 
@@ -1029,20 +1029,20 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .outline-list {
-  gap: 3px;
+  gap: 1px;
 }
 
 .outline-item {
   width: 100%;
-  padding: 6px 10px;
+  padding: 4px 10px;
   border: 0;
   border-radius: 10px;
   background: transparent;
   color: var(--color-editor-paragraph);
   font-family: var(--font-ui);
   text-align: left;
-  font-size: 14px;
-  line-height: 1.35;
+  font-size: 16px;
+  line-height: 1.22;
   cursor: pointer;
   transition:
     background var(--motion-fast) var(--motion-ease),

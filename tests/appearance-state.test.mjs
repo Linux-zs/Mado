@@ -24,9 +24,9 @@ test('appearance themes include vscode inspired options and github light', () =>
   ]);
 });
 
-test('createDefaultAppearanceSettings uses system defaults for theme and font slots', () => {
+test('createDefaultAppearanceSettings uses github light as the default theme and system font slots', () => {
   assert.deepEqual(createDefaultAppearanceSettings(), {
-    theme: 'system',
+    theme: 'github-light',
     fonts: {
       cjk: 'system',
       latin: 'system',
@@ -79,7 +79,7 @@ test('normalizeAppearanceSettings sanitizes invalid persisted values', () => {
     }
   );
 
-  assert.equal(normalizeAppearanceSettings({ theme: 'unknown' }).theme, 'system');
+  assert.equal(normalizeAppearanceSettings({ theme: 'unknown' }).theme, 'github-light');
 });
 
 test('resolveAppearanceDisplayTheme follows system preference only for system theme', () => {

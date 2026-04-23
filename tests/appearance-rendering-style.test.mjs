@@ -34,6 +34,47 @@ function getRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
+function getExactRuleBody(selector) {
+  const rulePattern = new RegExp(`(^|})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`, 'm');
+  const match = rulePattern.exec(css);
+  assert.ok(match, `Missing selector: ${selector}`);
+  const bodyStart = match.index + match[0].length;
+  let depth = 1;
+  let index = bodyStart;
+
+  while (index < css.length && depth > 0) {
+    const character = css[index];
+    if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+    }
+    index += 1;
+  }
+
+  return css.slice(bodyStart, index - 1);
+}
+
+function getLastRuleBody(selector) {
+  const start = css.lastIndexOf(`${selector} {`);
+  assert.notEqual(start, -1, `Missing selector: ${selector}`);
+  const bodyStart = css.indexOf('{', start) + 1;
+  let depth = 1;
+  let index = bodyStart;
+
+  while (index < css.length && depth > 0) {
+    const character = css[index];
+    if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+    }
+    index += 1;
+  }
+
+  return css.slice(bodyStart, index - 1);
+}
+
 test('clear type critical surfaces use opaque theme colors', () => {
   for (const selector of themeSelectors) {
     const rule = getRuleBody(selector);
@@ -72,4 +113,16 @@ test('text-heavy panels avoid opacity and transform transitions', () => {
     assert.doesNotMatch(rule, /transition\s*:[^;]*opacity/);
     assert.doesNotMatch(rule, /transition\s*:[^;]*transform/);
   }
+});
+
+test('sidebar file tree and outline use enlarged compact typography', () => {
+  assert.match(getExactRuleBody('.file-tree-label'), /font-size:\s*15px;/);
+  assert.match(getExactRuleBody('.file-tree-row.is-root .file-tree-label'), /font-size:\s*14px;/);
+
+  const outlineListRule = getLastRuleBody('.outline-list');
+  const outlineItemRule = getExactRuleBody('.outline-item');
+  assert.match(outlineListRule, /gap:\s*1px;/);
+  assert.match(outlineItemRule, /padding:\s*4px 10px;/);
+  assert.match(outlineItemRule, /font-size:\s*16px;/);
+  assert.match(outlineItemRule, /line-height:\s*1\.22;/);
 });

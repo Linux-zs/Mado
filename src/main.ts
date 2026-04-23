@@ -5589,7 +5589,7 @@ function createOutlineItemButton(item: OutlineItem): HTMLButtonElement {
 
 function syncOutlineItemButton(button: HTMLButtonElement, item: OutlineItem): void {
   button.dataset.pos = String(item.pos);
-  button.style.paddingLeft = `${10 + (item.level - 1) * 10}px`;
+  button.style.paddingLeft = `${10 + (item.level - 1) * 8}px`;
   button.textContent = item.text;
   button.classList.toggle('is-active', currentOutlineActivePos === item.pos);
 }

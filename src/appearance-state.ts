@@ -54,7 +54,7 @@ const APPEARANCE_TYPOGRAPHY_SIZE_MAX = 36;
 
 export function createDefaultAppearanceSettings(): AppearanceSettings {
   return {
-    theme: 'system',
+    theme: 'github-light',
     fonts: {
       cjk: 'system',
       latin: 'system',
