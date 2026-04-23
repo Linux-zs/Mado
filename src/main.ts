@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -201,13 +201,6 @@ type TextFileListResult = {
 type RecentMenuEntry = {
   fileName: string;
   filePath: string;
-};
-
-type ImportedTyporaTheme = {
-  id: string;
-  name: string;
-  cssPath: string;
-  importedAt: number;
 };
 
 type FileTreeNodeKind = 'root' | 'folder' | 'file';
@@ -535,14 +528,12 @@ const MARKDOWN_SYNC_FIDELITY_BLOCK_LIMIT = 160;
 const MARKDOWN_SYNC_FIDELITY_LENGTH_LIMIT = 120_000;
 const OUTLINE_SIDEBAR_REFRESH_DELAY_MS = 80;
 const APPEARANCE_FONT_SIZE_OPTIONS = Array.from({ length: 27 }, (_, index) => index + 10);
-const TYPORA_THEME_IMPORT_DEFAULT_PATH = 'D:\\INSTALL\\Typora\\resources\\style\\themes';
 const APPEARANCE_FONT_STYLE_LABELS: Record<AppearanceTypographyStyle, string> = {
   normal: 'Normal',
   bold: 'Bold',
   italic: 'Italic',
   boldItalic: 'Bold Italic'
 };
-const TYPORA_THEME_BUILT_IN_OPTION_VALUE = '__mado_builtin__';
 const APPEARANCE_FONT_PANEL_SLOT_LABELS: Record<AppearanceFontPanelSlot, string> = {
   cjk: '\u4e2d\u6587',
   latin: '\u82f1\u6587',
@@ -616,8 +607,6 @@ type AppCommandPayload =
   | { type: 'clearRecentFiles' }
   | { type: 'openRecentFile'; path: string }
   | { type: 'openPendingExternalFiles' }
-  | { type: 'openTyporaThemePanel' }
-  | { type: 'importTyporaTheme' }
   | { type: 'setAppearanceTheme'; theme: AppearanceTheme }
   | { type: 'openAppearanceFontPanel' }
   | { type: 'editCommand'; commandId: EditCommandId }
@@ -677,11 +666,6 @@ let appearanceFontFamiliesLoading = false;
 let appearanceFontFamiliesLoadPromise: Promise<string[]> | null = null;
 let appearanceFontPanelOpen = false;
 let appearanceFontPanelActiveSlot: AppearanceFontPanelSlot = 'cjk';
-let importedTyporaThemes: ImportedTyporaTheme[] = [];
-let importedTyporaThemesLoading = false;
-let importedTyporaThemesLoadPromise: Promise<ImportedTyporaTheme[]> | null = null;
-let appearanceTyporaThemePanelOpen = false;
-let activeTyporaThemeStylesheet: HTMLLinkElement | null = null;
 let editorScalePercent = loadEditorScalePercent();
 let currentDirectoryPath = loadCurrentDirectoryPath();
 let directoryFiles: DirectoryFileEntry[] = [];
@@ -1033,62 +1017,6 @@ appearanceFontClose.addEventListener('click', () => {
   closeAppearanceFontPanel();
 });
 
-const appearanceTyporaThemeBar = document.createElement('section');
-appearanceTyporaThemeBar.className = 'appearance-theme-bar is-hidden';
-appearanceTyporaThemeBar.setAttribute('aria-label', 'Typora theme controls');
-
-const appearanceTyporaThemeLabel = document.createElement('span');
-appearanceTyporaThemeLabel.className = 'appearance-theme-label';
-appearanceTyporaThemeLabel.textContent = 'Typora 主题';
-
-const appearanceTyporaThemeSelect = document.createElement('select');
-appearanceTyporaThemeSelect.className = 'appearance-theme-select';
-appearanceTyporaThemeSelect.setAttribute('aria-label', 'Typora theme');
-
-const appearanceTyporaThemeImportButton = document.createElement('button');
-appearanceTyporaThemeImportButton.type = 'button';
-appearanceTyporaThemeImportButton.className = 'appearance-theme-button';
-appearanceTyporaThemeImportButton.textContent = '导入';
-
-const appearanceTyporaThemeRefreshButton = document.createElement('button');
-appearanceTyporaThemeRefreshButton.type = 'button';
-appearanceTyporaThemeRefreshButton.className = 'appearance-theme-button';
-appearanceTyporaThemeRefreshButton.textContent = '刷新';
-
-const appearanceTyporaThemeClose = document.createElement('button');
-appearanceTyporaThemeClose.type = 'button';
-appearanceTyporaThemeClose.className = 'appearance-theme-close';
-appearanceTyporaThemeClose.setAttribute('aria-label', 'Close typora theme controls');
-appearanceTyporaThemeClose.textContent = '关闭';
-
-appearanceTyporaThemeBar.append(
-  appearanceTyporaThemeLabel,
-  appearanceTyporaThemeSelect,
-  appearanceTyporaThemeImportButton,
-  appearanceTyporaThemeRefreshButton,
-  appearanceTyporaThemeClose
-);
-
-appearanceTyporaThemeSelect.addEventListener('change', () => {
-  const nextThemeId =
-    appearanceTyporaThemeSelect.value === TYPORA_THEME_BUILT_IN_OPTION_VALUE
-      ? null
-      : appearanceTyporaThemeSelect.value;
-  setAppearanceTyporaTheme(nextThemeId);
-});
-
-appearanceTyporaThemeImportButton.addEventListener('click', () => {
-  void importTyporaThemeFromDialog();
-});
-
-appearanceTyporaThemeRefreshButton.addEventListener('click', () => {
-  void refreshImportedTyporaThemes();
-});
-
-appearanceTyporaThemeClose.addEventListener('click', () => {
-  closeAppearanceTyporaThemePanel();
-});
-
 const content = document.createElement('div');
 content.className = 'viewer-content viewer-content-empty';
 content.tabIndex = 0;
@@ -1281,7 +1209,7 @@ contextSubmenuPanel.setAttribute('role', 'menu');
 contextMenuLayer.append(contextMenuPanel, contextSubmenuPanel);
 
 header.append(fileName, fileHint);
-editorPanel.append(header, appearanceTyporaThemeBar, appearanceFontBar, findReplaceBar, content, statusBar);
+editorPanel.append(header, appearanceFontBar, findReplaceBar, content, statusBar);
 frame.append(sidebar, workspaceResizeHandle, editorPanel);
 shell.append(frame, contextMenuLayer, renameOverlay, deleteConfirmOverlay);
 app.replaceChildren(shell);
@@ -1299,7 +1227,6 @@ colorSchemeMediaQuery.addEventListener('change', () => {
 });
 renderFindReplaceBar();
 renderStatusBar();
-renderAppearanceTyporaThemeBar();
 renderAppearanceFontBar();
 scheduleNativeMenuStateSync();
 window.requestAnimationFrame(() => {
@@ -1607,14 +1534,6 @@ window.addEventListener(
       !isContextMenuEventTarget(event.target)
     ) {
       closeAppearanceFontPanel();
-    }
-
-    if (
-      appearanceTyporaThemePanelOpen &&
-      !isAppearanceTyporaThemePanelEventTarget(event.target) &&
-      !isContextMenuEventTarget(event.target)
-    ) {
-      closeAppearanceTyporaThemePanel();
     }
 
     if (contextMenuOpen && !isContextMenuEventTarget(event.target)) {
@@ -2934,197 +2853,6 @@ async function ensureAppearanceFontFamilies(): Promise<string[]> {
   return appearanceFontFamiliesLoadPromise;
 }
 
-function getSelectedImportedTyporaTheme(): ImportedTyporaTheme | null {
-  if (!appearanceSettings.typoraThemeId) {
-    return null;
-  }
-
-  return importedTyporaThemes.find((theme) => theme.id === appearanceSettings.typoraThemeId) ?? null;
-}
-
-function ensureTyporaThemeStylesheet(): HTMLLinkElement {
-  if (activeTyporaThemeStylesheet && activeTyporaThemeStylesheet.isConnected) {
-    return activeTyporaThemeStylesheet;
-  }
-
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.dataset.typoraTheme = 'true';
-  document.head.append(link);
-  activeTyporaThemeStylesheet = link;
-  return link;
-}
-
-function applyActiveTyporaThemeStylesheet(): void {
-  const root = document.documentElement;
-  const activeTheme = getSelectedImportedTyporaTheme();
-  root.dataset.typoraTheme = activeTheme ? 'true' : 'false';
-
-  if (!activeTheme) {
-    activeTyporaThemeStylesheet?.remove();
-    activeTyporaThemeStylesheet = null;
-    return;
-  }
-
-  const stylesheet = ensureTyporaThemeStylesheet();
-  const nextHref = convertFileSrc(activeTheme.cssPath);
-
-  if (stylesheet.href !== nextHref) {
-    stylesheet.href = nextHref;
-  }
-}
-
-function reconcileImportedTyporaThemeSelection(): void {
-  if (!appearanceSettings.typoraThemeId) {
-    applyActiveTyporaThemeStylesheet();
-    return;
-  }
-
-  if (getSelectedImportedTyporaTheme()) {
-    applyActiveTyporaThemeStylesheet();
-    return;
-  }
-
-  appearanceSettings = normalizeAppearanceSettings({
-    ...appearanceSettings,
-    typoraThemeId: null
-  });
-  applyAppearanceSettings();
-  persistAppearanceSettings();
-  syncAppearanceMenuState();
-  renderAppearanceTyporaThemeBar();
-}
-
-async function ensureImportedTyporaThemes(forceReload = false): Promise<ImportedTyporaTheme[]> {
-  if (forceReload) {
-    importedTyporaThemes = [];
-    importedTyporaThemesLoadPromise = null;
-  }
-
-  if (importedTyporaThemes.length > 0) {
-    return importedTyporaThemes;
-  }
-
-  if (importedTyporaThemesLoadPromise) {
-    return importedTyporaThemesLoadPromise;
-  }
-
-  importedTyporaThemesLoading = true;
-  renderAppearanceTyporaThemeBar();
-  importedTyporaThemesLoadPromise = invoke<ImportedTyporaTheme[]>('list_imported_typora_themes')
-    .then((themes) => {
-      importedTyporaThemes = Array.isArray(themes)
-        ? themes
-            .filter(
-              (theme): theme is ImportedTyporaTheme =>
-                Boolean(
-                  theme &&
-                    typeof theme.id === 'string' &&
-                    typeof theme.name === 'string' &&
-                    typeof theme.cssPath === 'string' &&
-                    typeof theme.importedAt === 'number'
-                )
-            )
-            .sort((left, right) => left.name.localeCompare(right.name))
-        : [];
-      reconcileImportedTyporaThemeSelection();
-      return importedTyporaThemes;
-    })
-    .catch((error) => {
-      console.error('Failed to load imported Typora themes.', error);
-      showHeaderNotice('Typora 主题列表加载失败。', true);
-      importedTyporaThemes = [];
-      reconcileImportedTyporaThemeSelection();
-      return importedTyporaThemes;
-    })
-    .finally(() => {
-      importedTyporaThemesLoading = false;
-      importedTyporaThemesLoadPromise = null;
-      renderAppearanceTyporaThemeBar();
-    });
-
-  return importedTyporaThemesLoadPromise;
-}
-
-async function refreshImportedTyporaThemes(): Promise<ImportedTyporaTheme[]> {
-  return ensureImportedTyporaThemes(true);
-}
-
-function renderAppearanceTyporaThemeBar(): void {
-  appearanceTyporaThemeBar.classList.toggle('is-hidden', !appearanceTyporaThemePanelOpen);
-
-  if (!appearanceTyporaThemePanelOpen) {
-    return;
-  }
-
-  const options = [
-    { value: TYPORA_THEME_BUILT_IN_OPTION_VALUE, label: '使用内置主题' },
-    ...importedTyporaThemes.map((theme) => ({
-      value: theme.id,
-      label: theme.name
-    }))
-  ];
-
-  appearanceTyporaThemeSelect.replaceChildren(
-    ...options.map((option) => {
-      const element = document.createElement('option');
-      element.value = option.value;
-      element.textContent = option.label;
-      return element;
-    })
-  );
-  appearanceTyporaThemeSelect.value = appearanceSettings.typoraThemeId ?? TYPORA_THEME_BUILT_IN_OPTION_VALUE;
-  appearanceTyporaThemeSelect.disabled = importedTyporaThemesLoading;
-  appearanceTyporaThemeRefreshButton.disabled = importedTyporaThemesLoading;
-}
-
-function closeAppearanceTyporaThemePanel(): void {
-  if (!appearanceTyporaThemePanelOpen) {
-    return;
-  }
-
-  appearanceTyporaThemePanelOpen = false;
-  renderAppearanceTyporaThemeBar();
-}
-
-async function openAppearanceTyporaThemePanel(): Promise<void> {
-  appearanceTyporaThemePanelOpen = true;
-  renderAppearanceTyporaThemeBar();
-  void ensureImportedTyporaThemes();
-}
-
-async function importTyporaThemeFromDialog(): Promise<void> {
-  const selected = await open({
-    directory: false,
-    multiple: false,
-    filters: [
-      {
-        name: 'Typora Theme',
-        extensions: ['css']
-      }
-    ],
-    defaultPath: TYPORA_THEME_IMPORT_DEFAULT_PATH
-  });
-
-  if (!selected || Array.isArray(selected)) {
-    return;
-  }
-
-  try {
-    const importedTheme = await invoke<ImportedTyporaTheme>('import_typora_theme', { cssPath: selected });
-    importedTyporaThemes = [...importedTyporaThemes.filter((theme) => theme.id !== importedTheme.id), importedTheme].sort(
-      (left, right) => left.name.localeCompare(right.name)
-    );
-    setAppearanceTyporaTheme(importedTheme.id);
-    appearanceTyporaThemePanelOpen = true;
-    renderAppearanceTyporaThemeBar();
-    showHeaderNotice(`已导入 Typora 主题：${importedTheme.name}`);
-  } catch (error) {
-    console.error('Failed to import Typora theme.', error);
-    showHeaderNotice('导入 Typora 主题失败。', true);
-  }
-}
-
 function getAppearanceTypographyForSlot(slot: AppearanceFontPanelSlot): AppearanceTypography {
   return slot === 'code' ? appearanceSettings.codeTypography : appearanceSettings.bodyTypography;
 }
@@ -3226,10 +2954,7 @@ function persistAppearanceSettings(): void {
 
 function syncAppearanceMenuState(): void {
   void invoke('update_appearance_menu_state', {
-    state: {
-      theme: appearanceSettings.theme,
-      typoraThemeId: appearanceSettings.typoraThemeId
-    }
+    state: appearanceSettings
   }).catch(() => {
     // The app can keep working even if native appearance menu sync fails.
   });
@@ -3271,7 +2996,6 @@ function applyAppearanceSettings(): void {
   root.style.setProperty('--font-code-size', `${appearanceSettings.codeTypography.sizePx}px`);
   root.style.setProperty('--font-code-weight', codeTypography.fontWeight);
   root.style.setProperty('--font-code-style', codeTypography.fontStyle);
-  applyActiveTyporaThemeStylesheet();
 }
 
 function setAppearanceTheme(theme: AppearanceTheme): void {
@@ -3283,17 +3007,6 @@ function setAppearanceTheme(theme: AppearanceTheme): void {
   persistAppearanceSettings();
   syncAppearanceMenuState();
   renderAppearanceFontBar();
-}
-
-function setAppearanceTyporaTheme(themeId: string | null): void {
-  appearanceSettings = normalizeAppearanceSettings({
-    ...appearanceSettings,
-    typoraThemeId: themeId
-  });
-  applyAppearanceSettings();
-  persistAppearanceSettings();
-  syncAppearanceMenuState();
-  renderAppearanceTyporaThemeBar();
 }
 
 function setAppearanceFont(
@@ -4672,7 +4385,6 @@ function bindMilkdownSession(session: MilkdownSession): void {
   tableToolPropertiesOpen = session.tableToolPropertiesOpen;
   activeTableToolState = session.activeTableToolState;
   session.lastUsedAt = Date.now();
-  syncTyporaWriteSurface();
 }
 
 function clearMilkdownBinding(): void {
@@ -4696,27 +4408,6 @@ function clearMilkdownBinding(): void {
   tableToolPropertiesOpen = false;
   activeTableToolState = null;
   tablePropertiesDraft = null;
-  syncTyporaWriteSurface();
-}
-
-function syncTyporaWriteSurface(): void {
-  for (const element of Array.from(document.querySelectorAll<HTMLElement>('.typora-write-surface'))) {
-    if (element.id === 'write') {
-      element.removeAttribute('id');
-    }
-
-    element.classList.remove('typora-write-surface');
-  }
-
-  const session = getActiveMilkdownSession();
-  const proseMirror = session?.host.querySelector<HTMLElement>('.ProseMirror') ?? null;
-
-  if (!proseMirror || editorViewMode !== 'rendered') {
-    return;
-  }
-
-  proseMirror.id = 'write';
-  proseMirror.classList.add('typora-write-surface');
 }
 
 function restoreMilkdownSessionScroll(session: MilkdownSession): void {
@@ -7665,11 +7356,6 @@ function isAppearanceFontPanelEventTarget(target: EventTarget | null): boolean {
   return Boolean(element && appearanceFontBar.contains(element));
 }
 
-function isAppearanceTyporaThemePanelEventTarget(target: EventTarget | null): boolean {
-  const element = getShortcutEventTargetElement(target);
-  return Boolean(element && appearanceTyporaThemeBar.contains(element));
-}
-
 function isTargetWithinAppShell(target: EventTarget | null): boolean {
   const element = getShortcutEventTargetElement(target);
   return Boolean(app && element && app.contains(element));
@@ -7854,9 +7540,6 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
       return typeof candidate.path === 'string' && candidate.path.length > 0;
     case 'openPendingExternalFiles':
       return true;
-    case 'openTyporaThemePanel':
-    case 'importTyporaTheme':
-      return true;
     case 'setAppearanceTheme':
       return candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark';
     case 'openAppearanceFontPanel':
@@ -8027,9 +7710,7 @@ async function dispatchAppCommand(
     source === 'native-menu' &&
     (command.type === 'editCommand' ||
       command.type === 'editorCommand' ||
-      command.type === 'openAppearanceFontPanel' ||
-      command.type === 'openTyporaThemePanel' ||
-      command.type === 'importTyporaTheme')
+      command.type === 'openAppearanceFontPanel')
   ) {
     await waitForNativeMenuToClose();
     if (command.type === 'editCommand' || command.type === 'editorCommand') {
@@ -8074,12 +7755,6 @@ async function dispatchAppCommand(
       return;
     case 'openPendingExternalFiles':
       await flushPendingExternalOpenFiles();
-      return;
-    case 'openTyporaThemePanel':
-      await openAppearanceTyporaThemePanel();
-      return;
-    case 'importTyporaTheme':
-      await importTyporaThemeFromDialog();
       return;
     case 'setAppearanceTheme':
       setAppearanceTheme(command.theme);
@@ -10773,7 +10448,6 @@ function renderEditorEmptyState(): void {
     '\u53ef\u4ee5\u901a\u8fc7\u201c\u6587\u4ef6 -> \u65b0\u5efa\u201d\u6216\u201c\u6587\u4ef6 -> \u6253\u5f00\u201d\u5f00\u59cb\u3002';
 
   content.append(emptyText, emptyHint);
-  syncTyporaWriteSurface();
   renderStatusBar();
 }
 function renderSourceEditor(documentState: DocumentState): void {
@@ -10793,7 +10467,6 @@ function renderSourceEditor(documentState: DocumentState): void {
 
   setSourceHistorySnapshot(documentState.id, documentState.content, { resetStacks: false });
   restoreSourceEditorContext(documentState);
-  syncTyporaWriteSurface();
   sourceTextarea.focus();
   renderStatusBar();
 }
@@ -11067,7 +10740,6 @@ function createMilkdownEditorForDocument(documentState: DocumentState, host: HTM
         applyMilkdownMarkdownUpdate(targetDocument, markdown);
       }).updated(() => {
         if (activeDocumentId === documentId) {
-          syncTyporaWriteSurface();
           scheduleOutlineSidebarRefresh(documentId);
           renderActiveMilkdownOverlays(documentId);
         }
@@ -11100,12 +10772,6 @@ await listen<unknown>(APP_COMMAND_EVENT, async (event) => {
     await dispatchAppCommand(event.payload, 'native-menu');
   }
 });
-
-if (appearanceSettings.typoraThemeId) {
-  void ensureImportedTyporaThemes();
-} else {
-  applyActiveTyporaThemeStylesheet();
-}
 
 void flushPendingExternalOpenFiles();
 

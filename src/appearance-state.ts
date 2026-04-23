@@ -9,7 +9,6 @@ export type AppearanceTypography = {
 
 export type AppearanceSettings = {
   theme: AppearanceTheme;
-  typoraThemeId: string | null;
   fonts: {
     cjk: AppearanceFontSelection;
     latin: AppearanceFontSelection;
@@ -34,7 +33,6 @@ const APPEARANCE_TYPOGRAPHY_SIZE_MAX = 36;
 export function createDefaultAppearanceSettings(): AppearanceSettings {
   return {
     theme: 'system',
-    typoraThemeId: null,
     fonts: {
       cjk: 'system',
       latin: 'system',
@@ -58,15 +56,6 @@ function normalizeAppearanceFontSelection(value: unknown): AppearanceFontSelecti
 
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : 'system';
-}
-
-function normalizeAppearanceThemeId(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : null;
 }
 
 function normalizeAppearanceTypography(
@@ -113,7 +102,6 @@ export function normalizeAppearanceSettings(value: unknown): AppearanceSettings 
 
   const candidate = value as {
     theme?: unknown;
-    typoraThemeId?: unknown;
     fonts?: {
       cjk?: unknown;
       latin?: unknown;
@@ -128,7 +116,6 @@ export function normalizeAppearanceSettings(value: unknown): AppearanceSettings 
       typeof candidate.theme === 'string' && APPEARANCE_THEMES.has(candidate.theme as AppearanceTheme)
         ? (candidate.theme as AppearanceTheme)
         : defaults.theme,
-    typoraThemeId: normalizeAppearanceThemeId(candidate.typoraThemeId),
     fonts: {
       cjk: normalizeAppearanceFontSelection(candidate.fonts?.cjk),
       latin: normalizeAppearanceFontSelection(candidate.fonts?.latin),

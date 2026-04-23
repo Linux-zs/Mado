@@ -30,9 +30,9 @@ test('clear type critical surfaces use opaque theme colors', () => {
 
   for (const rule of [rootRule, darkRootRule]) {
     assert.match(rule, /--color-workspace-surface:\s*#[0-9a-fA-F]{6,8};/);
-    assert.match(rule, /--color-sidebar-surface:\s*(?:#[0-9a-fA-F]{6,8}|var\(--side-bar-bg-color,\s*#[0-9a-fA-F]{6,8}\));/);
-    assert.match(rule, /--color-status-surface:\s*(?:#[0-9a-fA-F]{6,8}|var\(--side-bar-bg-color,\s*#[0-9a-fA-F]{6,8}\));/);
-    assert.match(rule, /--color-header-surface:\s*(?:#[0-9a-fA-F]{6,8}|var\(--side-bar-bg-color,\s*#[0-9a-fA-F]{6,8}\));/);
+    assert.match(rule, /--color-sidebar-surface:\s*#[0-9a-fA-F]{6,8};/);
+    assert.match(rule, /--color-status-surface:\s*#[0-9a-fA-F]{6,8};/);
+    assert.match(rule, /--color-header-surface:\s*#[0-9a-fA-F]{6,8};/);
     assert.match(rule, /--color-input-surface:\s*#[0-9a-fA-F]{6,8};/);
   }
 });
