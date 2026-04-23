@@ -94,10 +94,7 @@ import {
   getFindMatchStart
 } from './find-replace-state';
 import { extendInlineHtmlRemarkHandlers, madoInlineHtmlSupport } from './milkdown-inline-html';
-import {
-  resolveMarkdownSyncDecision,
-  synchronizeMarkdownContent
-} from './milkdown-sync-state';
+import { synchronizeMarkdownContent } from './milkdown-sync-state';
 import {
   getErrorMessage,
   resolveSaveFlowDecision
@@ -9691,6 +9688,27 @@ async function syncSidebarAfterSavedDocument(
   }
 }
 
+async function applySavedDocumentAndRefresh(
+  document: DocumentState,
+  saved: OpenedDocument,
+  options: {
+    ensureCurrentDirectory?: boolean;
+    refreshEditor?: boolean;
+  } = {}
+): Promise<void> {
+  applySavedDocumentState(document, saved);
+  await syncSidebarAfterSavedDocument(saved, {
+    ensureCurrentDirectory: options.ensureCurrentDirectory
+  });
+
+  if (options.refreshEditor) {
+    requestRender({ editor: true });
+    return;
+  }
+
+  renderDocumentHeader();
+}
+
 function applySavedDocumentState(document: DocumentState, saved: OpenedDocument): void {
   const now = Date.now();
 
@@ -9806,16 +9824,15 @@ async function handleSaveRequest(): Promise<void> {
       }
 
       const saved = await saveDocumentToPath(activeDocument, savePath);
-      applySavedDocumentState(activeDocument, saved);
-      await syncSidebarAfterSavedDocument(saved, { ensureCurrentDirectory: true });
-      requestRender({ editor: true });
+      await applySavedDocumentAndRefresh(activeDocument, saved, {
+        ensureCurrentDirectory: true,
+        refreshEditor: true
+      });
       return;
     }
 
     const saved = await saveDocumentToPath(activeDocument, activeDocument.filePath);
-    applySavedDocumentState(activeDocument, saved);
-    await syncSidebarAfterSavedDocument(saved);
-    renderDocumentHeader();
+    await applySavedDocumentAndRefresh(activeDocument, saved);
   } catch (error) {
     showHeaderNotice(getErrorMessage(error, '\u4fdd\u5b58\u6587\u4ef6\u5931\u8d25\u3002'), true);
   }
@@ -9858,9 +9875,10 @@ async function handleSaveAsRequest(): Promise<void> {
     });
 
     if (saveFlow.adoptsSavedDocument) {
-      applySavedDocumentState(activeDocument, saved);
-      await syncSidebarAfterSavedDocument(saved, { ensureCurrentDirectory: true });
-      requestRender({ editor: true });
+      await applySavedDocumentAndRefresh(activeDocument, saved, {
+        ensureCurrentDirectory: true,
+        refreshEditor: true
+      });
       return;
     }
 
@@ -9916,9 +9934,10 @@ async function handleRenameRequest(): Promise<void> {
 
     try {
       const saved = await saveDocumentToPath(activeDocument, savePath);
-      applySavedDocumentState(activeDocument, saved);
-      await syncSidebarAfterSavedDocument(saved, { ensureCurrentDirectory: true });
-      requestRender({ editor: true });
+      await applySavedDocumentAndRefresh(activeDocument, saved, {
+        ensureCurrentDirectory: true,
+        refreshEditor: true
+      });
     } catch (error) {
       showHeaderNotice(getErrorMessage(error, '\u547d\u540d\u5e76\u4fdd\u5b58\u5931\u8d25\u3002'), true);
     }

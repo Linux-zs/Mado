@@ -1692,10 +1692,6 @@ body.is-resizing-layout .workspace-resize-handle::after,
   margin-top: 8px;
 }
 
-.viewer-line-blank {
-  min-height: 1.76em;
-}
-
 .viewer-empty-text {
   color: var(--color-empty-text);
 }

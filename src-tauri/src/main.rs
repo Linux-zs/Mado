@@ -1839,7 +1839,7 @@ fn main() {
       }
     })
     .run(tauri::generate_context!())
-    .expect("failed to run Tias");
+    .expect("failed to run Mado");
 }
 
 #[cfg(test)]

@@ -24,14 +24,11 @@ export function getFindMatchStart(match: FindMatchLike): number {
   return match.kind === 'source' ? match.start : match.from;
 }
 
-export function getFindMatchEnd(match: FindMatchLike): number {
+function getFindMatchEnd(match: FindMatchLike): number {
   return match.kind === 'source' ? match.end : match.to;
 }
 
-export function findFindMatchIndex<TMatch extends FindMatchLike>(
-  matches: TMatch[],
-  target: TMatch
-): number {
+function findFindMatchIndex<TMatch extends FindMatchLike>(matches: TMatch[], target: TMatch): number {
   if (target.kind === 'source') {
     return matches.findIndex(
       (candidate) =>
