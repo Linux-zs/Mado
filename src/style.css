@@ -849,7 +849,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--color-editor-paragraph);
+  color: var(--color-text-muted);
   font-family: var(--font-ui);
   text-align: left;
   cursor: pointer;
@@ -876,24 +876,10 @@ body.is-resizing-layout .workspace-resize-handle::after,
   background: var(--tree-active-border);
 }
 
-.file-tree-row.is-open:not(.is-active) {
-  color: var(--color-text-strong);
-}
-
 .file-tree-row.is-root .file-tree-label {
-  color: var(--color-text-strong);
   font-size: 14px;
-  font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-}
-
-.file-tree-row.is-folder .file-tree-label {
-  font-weight: 560;
-}
-
-.file-tree-row.is-file .file-tree-label {
-  font-weight: 450;
 }
 
 .file-tree-row.is-hidden-name:not(.is-active) .file-tree-label {
@@ -1056,7 +1042,6 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .outline-item.is-active {
   background: rgba(172, 145, 96, 0.18);
-  color: var(--color-hover-strong);
   transform: translateX(2px);
 }
 
