@@ -8092,6 +8092,10 @@ function startCodeBlockLanguageEdit(documentId: string, pos: number, language: s
   focusCodeBlockLanguageInput(documentId, pos);
 }
 
+function isCodeBlockLanguageEventTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('.code-block-language-shell'));
+}
+
 function getCodeBlockLanguageOverlayRoot(host: HTMLDivElement): HTMLDivElement {
   const existingRoot = host.querySelector<HTMLDivElement>(':scope > .code-block-language-overlay-root');
 
@@ -8108,6 +8112,15 @@ function getCodeBlockLanguageOverlayRoot(host: HTMLDivElement): HTMLDivElement {
 function createCodeBlockLanguageShell(root: HTMLDivElement): HTMLDivElement {
   const shell = document.createElement('div');
   shell.className = 'code-block-language-shell';
+  shell.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+  });
+  shell.addEventListener('pointerup', (event) => {
+    event.stopPropagation();
+  });
+  shell.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
   root.append(shell);
   return shell;
 }
@@ -8177,19 +8190,21 @@ function renderCodeBlockLanguageShell(
   }
 
   shell.classList.remove('is-editing');
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'code-block-language-chip';
-  button.textContent = getCodeBlockLanguageBadgeText(language);
-  button.setAttribute('aria-label', 'Edit code block language');
-  button.addEventListener('pointerdown', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  button.addEventListener('click', () => {
-    startCodeBlockLanguageEdit(documentId, pos, language);
-  });
-  shell.append(button);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'code-block-language-chip';
+    button.textContent = getCodeBlockLanguageBadgeText(language);
+    button.setAttribute('aria-label', 'Edit code block language');
+    button.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      startCodeBlockLanguageEdit(documentId, pos, language);
+    });
+    shell.append(button);
 }
 
 function renderCodeBlockLanguageControls(documentId: string): void {
@@ -10629,12 +10644,24 @@ function createMilkdownHost(documentId: string): HTMLDivElement {
   const host = document.createElement('div');
   host.className = 'milkdown-host';
   host.addEventListener('pointerdown', (event) => {
+    if (isCodeBlockLanguageEventTarget(event.target)) {
+      return;
+    }
+
     handleTrailingCodeBlockPointerDown(event, documentId);
   });
-  host.addEventListener('pointerup', () => {
+  host.addEventListener('pointerup', (event) => {
+    if (isCodeBlockLanguageEventTarget(event.target)) {
+      return;
+    }
+
     scheduleHeadingMarkerRefresh(documentId);
   });
-  host.addEventListener('click', () => {
+  host.addEventListener('click', (event) => {
+    if (isCodeBlockLanguageEventTarget(event.target)) {
+      return;
+    }
+
     scheduleHeadingMarkerRefresh(documentId);
   });
 

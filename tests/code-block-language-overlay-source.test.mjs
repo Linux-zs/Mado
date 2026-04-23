@@ -16,3 +16,11 @@ test('code block language editing refreshes highlighting without relying on stal
   assert.match(mainSource, /codeBlockDecoration:\s*true/);
   assert.doesNotMatch(mainSource, /spec\.codeBlockKey === block\.key/);
 });
+
+test('code block language interactions are isolated from milkdown host refresh clicks', () => {
+  assert.match(mainSource, /function isCodeBlockLanguageEventTarget/);
+  assert.match(mainSource, /createCodeBlockLanguageShell[\s\S]*shell\.addEventListener\('pointerdown'/);
+  assert.match(mainSource, /button\.addEventListener\('pointerdown'[\s\S]*startCodeBlockLanguageEdit/);
+  assert.match(mainSource, /host\.addEventListener\('click', \(event\) => \{[\s\S]*isCodeBlockLanguageEventTarget\(event\.target\)/);
+  assert.match(css, /\.code-block-language-chip\s*\{[\s\S]*cursor:\s*pointer;/);
+});
