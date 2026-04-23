@@ -32,7 +32,7 @@ export function resolveRecentFilesErrorReport(
   };
 }
 
-export function resolveRecentFilesErrorReset(_alreadyShown: boolean): RecentFilesErrorResetDecision {
+export function resolveRecentFilesErrorReset(): RecentFilesErrorResetDecision {
   return {
     nextShown: false
   };

@@ -607,7 +607,7 @@ type AppCommandPayload =
   | { type: 'setAppearanceTheme'; theme: AppearanceTheme }
   | { type: 'openAppearanceFontPanel' }
   | { type: 'editCommand'; commandId: EditCommandId }
-  | { type: 'editorCommand'; commandId: string };
+  | { type: 'editorCommand'; commandId: EditorCommandId };
 type AppearanceFontPanelSlot = keyof AppearanceSettings['fonts'];
 type MilkdownCtxAccessor = {
   get: <T>(slice: unknown) => T;
@@ -625,6 +625,12 @@ type ShortcutDefinition = ShortcutBinding & {
 type FileShortcutDefinition = ShortcutBinding & {
   command: Exclude<AppCommandPayload, { type: 'openRecentFile' }>;
 };
+
+const EDITOR_COMMAND_ID_VALUES = new Set<string>(Object.values(EDITOR_COMMAND_IDS));
+
+function isEditorCommandId(commandId: unknown): commandId is EditorCommandId {
+  return typeof commandId === 'string' && EDITOR_COMMAND_ID_VALUES.has(commandId);
+}
 type EditShortcutDefinition = ShortcutBinding & {
   commandId: EditCommandId;
 };
@@ -3291,7 +3297,7 @@ function reportRecentFilesMenuSyncError(error: unknown): void {
 function persistRecentFiles(): void {
   try {
     window.localStorage.setItem(RECENT_FILES_STORAGE_KEY, JSON.stringify(recentFiles));
-    recentFilesStorageErrorShown = resolveRecentFilesErrorReset(recentFilesStorageErrorShown).nextShown;
+    recentFilesStorageErrorShown = resolveRecentFilesErrorReset().nextShown;
   } catch (error) {
     reportRecentFilesStorageError(error);
   }
@@ -3399,7 +3405,7 @@ async function flushRecentFilesMenuSync(): Promise<void> {
     await invoke<void>('update_recent_files_menu', {
       entries: createRecentMenuEntries()
     });
-    recentFilesMenuSyncErrorShown = resolveRecentFilesErrorReset(recentFilesMenuSyncErrorShown).nextShown;
+    recentFilesMenuSyncErrorShown = resolveRecentFilesErrorReset().nextShown;
   } catch (error) {
     reportRecentFilesMenuSyncError(error);
     recentFilesMenuPendingRevision = recentFilesRevision;
@@ -7236,19 +7242,18 @@ const editorCommandHandlers = new Map<EditorCommandId, EditorCommandHandler>([
   [EDITOR_COMMAND_IDS.inlineKbd, () => toggleSelectionMark('madoKeyboard')]
 ]);
 
-function executeEditorCommand(commandId: string): boolean {
-  const typedCommandId = commandId as EditorCommandId;
-  const unavailableMessage = getEditorCommandUnavailableMessage(typedCommandId);
+function executeEditorCommand(commandId: EditorCommandId): boolean {
+  const unavailableMessage = getEditorCommandUnavailableMessage(commandId);
 
   if (unavailableMessage) {
     showHeaderNotice(unavailableMessage, true);
     return false;
   }
 
-  const handler = editorCommandHandlers.get(typedCommandId);
+  const handler = editorCommandHandlers.get(commandId);
 
   if (!handler) {
-    showHeaderNotice('\u590d\u5236\u5931\u8d25\u3002', true);
+    showHeaderNotice('\u5f53\u524d\u547d\u4ee4\u5c1a\u672a\u5b9e\u73b0\u3002', true);
     return false;
   }
 
@@ -7549,7 +7554,7 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
           candidate.commandId === 'replace')
       );
     case 'editorCommand':
-      return typeof candidate.commandId === 'string' && candidate.commandId.length > 0;
+      return isEditorCommandId(candidate.commandId);
     default:
       return false;
   }

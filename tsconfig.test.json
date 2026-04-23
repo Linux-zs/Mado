@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "strict": true,
     "skipLibCheck": true,
     "noEmit": false,
@@ -10,17 +10,9 @@
     "rootDir": "."
   },
   "include": [
-    "src/delete-confirm-focus-state.ts",
-    "src/directory-refresh-state.ts",
-    "src/code-block-language-state.ts",
-    "src/find-replace-state.ts",
-    "src/milkdown-sync-state.ts",
-    "src/recent-files-error-state.ts",
-    "src/save-flow-state.ts",
-    "src/source-history-state.ts",
-    "src/shortcut-guards.ts",
-    "src/table-overlay-state.ts",
-    "src/appearance-state.ts",
-    "src/editor-scale-state.ts"
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/main.ts"
   ]
 }

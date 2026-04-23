@@ -42,10 +42,7 @@ test('resolveRecentFilesErrorReport emits the menu sync notice once', () => {
 });
 
 test('resolveRecentFilesErrorReset clears the shown flag after a success', () => {
-  assert.deepEqual(resolveRecentFilesErrorReset(true), {
-    nextShown: false
-  });
-  assert.deepEqual(resolveRecentFilesErrorReset(false), {
+  assert.deepEqual(resolveRecentFilesErrorReset(), {
     nextShown: false
   });
 });
