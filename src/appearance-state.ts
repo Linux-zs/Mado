@@ -1,4 +1,14 @@
-export type AppearanceTheme = 'system' | 'light' | 'dark';
+export type AppearanceTheme =
+  | 'system'
+  | 'light'
+  | 'dark'
+  | 'one-dark-pro'
+  | 'dracula'
+  | 'catppuccin-mocha'
+  | 'night-owl'
+  | 'tokyo-night'
+  | 'github-light';
+export type AppearanceResolvedTheme = Exclude<AppearanceTheme, 'system'>;
 export type AppearanceFontSelection = 'system' | string;
 export type AppearanceTypographyStyle = 'normal' | 'bold' | 'italic' | 'boldItalic';
 
@@ -18,7 +28,19 @@ export type AppearanceSettings = {
   codeTypography: AppearanceTypography;
 };
 
-const APPEARANCE_THEMES = new Set<AppearanceTheme>(['system', 'light', 'dark']);
+export const APPEARANCE_THEMES: readonly AppearanceTheme[] = [
+  'system',
+  'light',
+  'dark',
+  'one-dark-pro',
+  'dracula',
+  'catppuccin-mocha',
+  'night-owl',
+  'tokyo-night',
+  'github-light'
+];
+
+const APPEARANCE_THEME_SET = new Set<AppearanceTheme>(APPEARANCE_THEMES);
 const APPEARANCE_TYPOGRAPHY_STYLES = new Set<AppearanceTypographyStyle>([
   'normal',
   'bold',
@@ -113,7 +135,7 @@ export function normalizeAppearanceSettings(value: unknown): AppearanceSettings 
 
   return {
     theme:
-      typeof candidate.theme === 'string' && APPEARANCE_THEMES.has(candidate.theme as AppearanceTheme)
+      typeof candidate.theme === 'string' && APPEARANCE_THEME_SET.has(candidate.theme as AppearanceTheme)
         ? (candidate.theme as AppearanceTheme)
         : defaults.theme,
     fonts: {
@@ -129,7 +151,7 @@ export function normalizeAppearanceSettings(value: unknown): AppearanceSettings 
 export function resolveAppearanceDisplayTheme(
   theme: AppearanceTheme,
   prefersDark: boolean
-): 'light' | 'dark' {
+): AppearanceResolvedTheme {
   if (theme === 'system') {
     return prefersDark ? 'dark' : 'light';
   }

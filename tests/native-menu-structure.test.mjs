@@ -13,3 +13,17 @@ test('native app menu no longer includes a top-level view menu', () => {
   assert.doesNotMatch(rustSource, /视图\(&V\)/);
   assert.doesNotMatch(rustSource, /&view_menu/);
 });
+
+test('native app menu includes vscode inspired appearance themes', () => {
+  for (const theme of [
+    'one-dark-pro',
+    'dracula',
+    'catppuccin-mocha',
+    'night-owl',
+    'tokyo-night',
+    'github-light'
+  ]) {
+    assert.match(rustSource, new RegExp(`appearance-theme:${theme}`));
+    assert.match(rustSource, new RegExp(`theme: "${theme}"\\.to_string\\(\\)`));
+  }
+});

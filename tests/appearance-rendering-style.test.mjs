@@ -3,6 +3,16 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
+const themeSelectors = [
+  ':root',
+  ":root[data-theme='dark']",
+  ":root[data-theme='one-dark-pro']",
+  ":root[data-theme='dracula']",
+  ":root[data-theme='catppuccin-mocha']",
+  ":root[data-theme='night-owl']",
+  ":root[data-theme='tokyo-night']",
+  ":root[data-theme='github-light']"
+];
 
 function getRuleBody(selector) {
   const start = css.indexOf(`${selector} {`);
@@ -25,15 +35,30 @@ function getRuleBody(selector) {
 }
 
 test('clear type critical surfaces use opaque theme colors', () => {
-  const rootRule = getRuleBody(':root');
-  const darkRootRule = getRuleBody(":root[data-theme='dark']");
-
-  for (const rule of [rootRule, darkRootRule]) {
+  for (const selector of themeSelectors) {
+    const rule = getRuleBody(selector);
     assert.match(rule, /--color-workspace-surface:\s*#[0-9a-fA-F]{6,8};/);
     assert.match(rule, /--color-sidebar-surface:\s*#[0-9a-fA-F]{6,8};/);
     assert.match(rule, /--color-status-surface:\s*#[0-9a-fA-F]{6,8};/);
     assert.match(rule, /--color-header-surface:\s*#[0-9a-fA-F]{6,8};/);
     assert.match(rule, /--color-input-surface:\s*#[0-9a-fA-F]{6,8};/);
+  }
+});
+
+test('theme rules define markdown code and syntax color tokens', () => {
+  for (const selector of themeSelectors) {
+    const rule = getRuleBody(selector);
+    for (const token of [
+      '--color-inline-code-bg',
+      '--color-code-block-bg',
+      '--color-table-header-bg',
+      '--color-code-comment',
+      '--color-code-keyword',
+      '--color-code-string',
+      '--color-code-title'
+    ]) {
+      assert.match(rule, new RegExp(`${token}:\\s*[^;]+;`), `${selector} missing ${token}`);
+    }
   }
 });
 

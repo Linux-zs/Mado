@@ -40,6 +40,12 @@ const MENU_RECENT_FILE_PREFIX: &str = "file-recent-open:";
 const MENU_APPEARANCE_THEME_SYSTEM_ID: &str = "appearance-theme:system";
 const MENU_APPEARANCE_THEME_LIGHT_ID: &str = "appearance-theme:light";
 const MENU_APPEARANCE_THEME_DARK_ID: &str = "appearance-theme:dark";
+const MENU_APPEARANCE_THEME_ONE_DARK_PRO_ID: &str = "appearance-theme:one-dark-pro";
+const MENU_APPEARANCE_THEME_DRACULA_ID: &str = "appearance-theme:dracula";
+const MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID: &str = "appearance-theme:catppuccin-mocha";
+const MENU_APPEARANCE_THEME_NIGHT_OWL_ID: &str = "appearance-theme:night-owl";
+const MENU_APPEARANCE_THEME_TOKYO_NIGHT_ID: &str = "appearance-theme:tokyo-night";
+const MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID: &str = "appearance-theme:github-light";
 const MENU_APPEARANCE_FONT_PANEL_OPEN_ID: &str = "appearance-font-panel:open";
 const RECENT_FILES_MENU_LIMIT: usize = 10;
 const APP_COMMAND_EVENT: &str = "request-app-command";
@@ -1180,6 +1186,43 @@ fn build_appearance_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submen
       "\u{6df1}\u{8272}",
       false,
     )?)
+    .item(&PredefinedMenuItem::separator(app)?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_ONE_DARK_PRO_ID,
+      "One Dark Pro",
+      false,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_DRACULA_ID,
+      "Dracula",
+      false,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID,
+      "Catppuccin Mocha",
+      false,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_NIGHT_OWL_ID,
+      "Night Owl",
+      false,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_TOKYO_NIGHT_ID,
+      "Tokyo Night",
+      false,
+    )?)
+    .item(&check_menu_item(
+      app,
+      MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID,
+      "GitHub Light",
+      false,
+    )?)
     .build()?;
 
   SubmenuBuilder::new(app, "\u{5916}\u{89c2}(&A)")
@@ -1267,6 +1310,12 @@ fn sync_appearance_menu_state<R: Runtime>(
   let theme = match state.theme.as_str() {
     "light" => MENU_APPEARANCE_THEME_LIGHT_ID,
     "dark" => MENU_APPEARANCE_THEME_DARK_ID,
+    "one-dark-pro" => MENU_APPEARANCE_THEME_ONE_DARK_PRO_ID,
+    "dracula" => MENU_APPEARANCE_THEME_DRACULA_ID,
+    "catppuccin-mocha" => MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID,
+    "night-owl" => MENU_APPEARANCE_THEME_NIGHT_OWL_ID,
+    "tokyo-night" => MENU_APPEARANCE_THEME_TOKYO_NIGHT_ID,
+    "github-light" => MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID,
     _ => MENU_APPEARANCE_THEME_SYSTEM_ID,
   };
 
@@ -1282,6 +1331,30 @@ fn sync_appearance_menu_state<R: Runtime>(
     (
       MENU_APPEARANCE_THEME_DARK_ID,
       theme == MENU_APPEARANCE_THEME_DARK_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_ONE_DARK_PRO_ID,
+      theme == MENU_APPEARANCE_THEME_ONE_DARK_PRO_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_DRACULA_ID,
+      theme == MENU_APPEARANCE_THEME_DRACULA_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID,
+      theme == MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_NIGHT_OWL_ID,
+      theme == MENU_APPEARANCE_THEME_NIGHT_OWL_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_TOKYO_NIGHT_ID,
+      theme == MENU_APPEARANCE_THEME_TOKYO_NIGHT_ID,
+    ),
+    (
+      MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID,
+      theme == MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID,
     ),
   ] {
     set_check_menu_item_checked(&menu_items, menu_id, is_checked)?;
@@ -1745,6 +1818,24 @@ fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
     }),
     MENU_APPEARANCE_THEME_DARK_ID => Some(AppCommandPayload::SetAppearanceTheme {
       theme: "dark".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_ONE_DARK_PRO_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "one-dark-pro".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_DRACULA_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "dracula".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "catppuccin-mocha".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_NIGHT_OWL_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "night-owl".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_TOKYO_NIGHT_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "tokyo-night".to_string(),
+    }),
+    MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID => Some(AppCommandPayload::SetAppearanceTheme {
+      theme: "github-light".to_string(),
     }),
     MENU_APPEARANCE_FONT_PANEL_OPEN_ID => Some(AppCommandPayload::OpenAppearanceFontPanel),
     MENU_CLEAR_RECENT_FILES_ID => Some(AppCommandPayload::ClearRecentFiles),
@@ -2474,6 +2565,14 @@ mod tests {
     assert!(matches!(
       app_command_for_menu_id(MENU_APPEARANCE_THEME_DARK_ID),
       Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "dark"
+    ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_THEME_CATPPUCCIN_MOCHA_ID),
+      Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "catppuccin-mocha"
+    ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_THEME_GITHUB_LIGHT_ID),
+      Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "github-light"
     ));
     assert!(matches!(
       app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_OPEN_ID),

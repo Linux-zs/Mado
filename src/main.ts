@@ -58,6 +58,7 @@ import { unified } from 'unified';
 
 import {
   createDefaultAppearanceSettings,
+  APPEARANCE_THEMES,
   normalizeAppearanceSettings,
   resolveAppearanceDisplayTheme,
   resolveAppearanceFontStack,
@@ -627,6 +628,7 @@ type FileShortcutDefinition = ShortcutBinding & {
 };
 
 const EDITOR_COMMAND_ID_VALUES = new Set<string>(Object.values(EDITOR_COMMAND_IDS));
+const APPEARANCE_THEME_VALUES = new Set<string>(APPEARANCE_THEMES);
 
 function isEditorCommandId(commandId: unknown): commandId is EditorCommandId {
   return typeof commandId === 'string' && EDITOR_COMMAND_ID_VALUES.has(commandId);
@@ -7543,7 +7545,7 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
     case 'openPendingExternalFiles':
       return true;
     case 'setAppearanceTheme':
-      return candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark';
+      return typeof candidate.theme === 'string' && APPEARANCE_THEME_VALUES.has(candidate.theme);
     case 'openAppearanceFontPanel':
       return true;
     case 'editCommand':
