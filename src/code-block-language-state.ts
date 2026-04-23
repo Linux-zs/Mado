@@ -1,4 +1,5 @@
 export const DEFAULT_CODE_BLOCK_LANGUAGE_BADGE_TEXT = 'text';
+export const DEFAULT_CODE_BLOCK_HIGHLIGHT_LANGUAGE = 'plaintext';
 
 const CODE_BLOCK_LANGUAGE_ALIASES: Record<string, string> = {
   shell: 'bash',
@@ -68,6 +69,17 @@ export function normalizeCodeBlockLanguageInput(value: unknown): string | null {
   }
 
   return CODE_BLOCK_LANGUAGE_ALIASES[trimmed] ?? trimmed;
+}
+
+export function resolveCodeBlockHighlightLanguage(
+  language: string | null,
+  isSupportedLanguage: (language: string) => boolean
+): string {
+  if (!language) {
+    return DEFAULT_CODE_BLOCK_HIGHLIGHT_LANGUAGE;
+  }
+
+  return isSupportedLanguage(language) ? language : DEFAULT_CODE_BLOCK_HIGHLIGHT_LANGUAGE;
 }
 
 export function getCodeBlockLanguageBadgeText(language: string | null): string {

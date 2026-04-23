@@ -78,7 +78,8 @@ import {
 import {
   DEFAULT_CODE_BLOCK_LANGUAGE_BADGE_TEXT,
   getCodeBlockLanguageBadgeText,
-  normalizeCodeBlockLanguageInput
+  normalizeCodeBlockLanguageInput,
+  resolveCodeBlockHighlightLanguage
 } from './code-block-language-state';
 import {
   createDeleteConfirmDialogResult,
@@ -481,10 +482,9 @@ type EditorCommandContext = {
 };
 
 type CodeBlockDecorationInfo = {
-  key: string;
   pos: number;
   nodeSize: number;
-  language: string;
+  highlightLanguage: string;
   text: string;
 };
 
@@ -8003,6 +8003,12 @@ function normalizeCodeBlockLanguage(value: unknown): string | null {
   return normalizeCodeBlockLanguageInput(value);
 }
 
+function resolveCodeBlockHighlightLanguageName(language: string | null): string {
+  return resolveCodeBlockHighlightLanguage(language, (candidate) =>
+    Object.hasOwn(CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS, candidate)
+  );
+}
+
 function clearCodeBlockLanguageEditState(): void {
   activeCodeBlockLanguageEditState = null;
 }
@@ -8017,6 +8023,7 @@ function commitCodeBlockLanguageEdit(documentId: string, pos: number, rawValue: 
   }
 
   const nextLanguage = normalizeCodeBlockLanguage(rawValue);
+  const nextHighlightLanguage = resolveCodeBlockHighlightLanguageName(nextLanguage);
 
   session.editor.action((ctx) => {
     const view = ctx.get(editorViewCtx);
@@ -8046,6 +8053,16 @@ function commitCodeBlockLanguageEdit(documentId: string, pos: number, rawValue: 
       .scrollIntoView();
 
     view.dispatch(tr);
+
+    if (
+      !registeredHighlightLanguages.has(nextHighlightLanguage) &&
+      !pendingHighlightLanguageLoads.has(nextHighlightLanguage)
+    ) {
+      void ensureCodeBlockHighlightLanguage(nextHighlightLanguage);
+    } else {
+      scheduleCodeBlockHighlightRefresh();
+    }
+
     renderCodeBlockLanguageControls(documentId);
     view.focus();
   });
@@ -8318,10 +8335,8 @@ function collectCodeBlockLanguages(doc: EditorView['state']['doc']): string[] {
       return true;
     }
 
-    const language = normalizeCodeBlockLanguage(node.attrs.language);
-
-    if (language && CODE_BLOCK_HIGHLIGHT_LANGUAGE_LOADERS[language]) {
-      languages.add(language);
+    if (node.textContent.length > 0) {
+      languages.add(resolveCodeBlockHighlightLanguageName(normalizeCodeBlockLanguage(node.attrs.language)));
     }
 
     return true;
@@ -8378,7 +8393,7 @@ function collectHighlightDecorationsFromNode(
   offset: number,
   classNames: string[],
   decorations: Decoration[],
-  spec?: { codeBlockKey: string }
+  spec?: { codeBlockDecoration: true }
 ): number {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
@@ -8458,17 +8473,16 @@ function createCodeBlockDecorationInfo(
     return null;
   }
 
-  const language = normalizeCodeBlockLanguage(node.attrs.language);
-
-  if (!language || node.textContent.length === 0) {
+  if (node.textContent.length === 0) {
     return null;
   }
 
+  const language = normalizeCodeBlockLanguage(node.attrs.language);
+
   return {
-    key: `${position}:${language}:${node.textContent.length}`,
     pos: position,
     nodeSize: node.nodeSize,
-    language,
+    highlightLanguage: resolveCodeBlockHighlightLanguageName(language),
     text: node.textContent
   };
 }
@@ -8482,7 +8496,7 @@ function collectCodeBlockDecorationInfos(
     const info = createCodeBlockDecorationInfo(node, position);
 
     if (info) {
-      blocks.set(info.key, info);
+      blocks.set(String(info.pos), info);
       return false;
     }
 
@@ -8518,7 +8532,7 @@ function collectTouchedCodeBlockDecorationInfos(
           from: newStart,
           to: newEnd
         })) {
-          blocks.set(block.key, block);
+          blocks.set(String(block.pos), block);
         }
       }
     });
@@ -8530,13 +8544,13 @@ function collectTouchedCodeBlockDecorationInfos(
 function buildCodeBlockHighlightDecorationsForInfo(info: CodeBlockDecorationInfo): Decoration[] {
   if (
     !highlightJsApi ||
-    !registeredHighlightLanguages.has(info.language) ||
-    !highlightJsApi.getLanguage(info.language)
+    !registeredHighlightLanguages.has(info.highlightLanguage) ||
+    !highlightJsApi.getLanguage(info.highlightLanguage)
   ) {
     return [];
   }
 
-  const highlighted = getCachedHighlightedMarkup(highlightJsApi, info.language, info.text);
+  const highlighted = getCachedHighlightedMarkup(highlightJsApi, info.highlightLanguage, info.text);
 
   if (!highlighted) {
     return [];
@@ -8552,7 +8566,7 @@ function buildCodeBlockHighlightDecorationsForInfo(info: CodeBlockDecorationInfo
   const decorations: Decoration[] = [];
   const codeStart = info.pos + 1;
   let offset = 0;
-  const spec = { codeBlockKey: info.key };
+  const spec = { codeBlockDecoration: true as const };
 
   decorations.push(
     Decoration.node(
@@ -8587,7 +8601,11 @@ function removeCodeBlockDecorations(
       ...decorations.find(
         block.pos,
         block.pos + block.nodeSize,
-        (spec) => typeof spec === 'object' && spec !== null && 'codeBlockKey' in spec && spec.codeBlockKey === block.key
+        (spec) =>
+          typeof spec === 'object' &&
+          spec !== null &&
+          'codeBlockDecoration' in spec &&
+          spec.codeBlockDecoration === true
       )
     );
   }

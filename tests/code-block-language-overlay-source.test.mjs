@@ -10,3 +10,9 @@ test('code block language controls use a dedicated overlay root instead of appen
   assert.doesNotMatch(mainSource, /pre\.append\(shell\);/);
   assert.match(css, /\.code-block-language-overlay-root\b/);
 });
+
+test('code block language editing refreshes highlighting without relying on stale language keys', () => {
+  assert.match(mainSource, /resolveCodeBlockHighlightLanguageName/);
+  assert.match(mainSource, /codeBlockDecoration:\s*true/);
+  assert.doesNotMatch(mainSource, /spec\.codeBlockKey === block\.key/);
+});
