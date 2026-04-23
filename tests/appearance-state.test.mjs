@@ -12,6 +12,7 @@ import {
 test('createDefaultAppearanceSettings uses system defaults for theme and font slots', () => {
   assert.deepEqual(createDefaultAppearanceSettings(), {
     theme: 'system',
+    typoraThemeId: null,
     fonts: {
       cjk: 'system',
       latin: 'system',
@@ -32,6 +33,7 @@ test('normalizeAppearanceSettings sanitizes invalid persisted values', () => {
   assert.deepEqual(
     normalizeAppearanceSettings({
       theme: 'unknown',
+      typoraThemeId: '   ',
       fonts: {
         cjk: '',
         latin: '  Georgia  ',
@@ -48,6 +50,7 @@ test('normalizeAppearanceSettings sanitizes invalid persisted values', () => {
     }),
     {
       theme: 'system',
+      typoraThemeId: null,
       fonts: {
         cjk: 'system',
         latin: 'Georgia',
@@ -62,6 +65,15 @@ test('normalizeAppearanceSettings sanitizes invalid persisted values', () => {
         sizePx: 10
       }
     }
+  );
+});
+
+test('normalizeAppearanceSettings keeps imported typora theme identifiers', () => {
+  assert.equal(
+    normalizeAppearanceSettings({
+      typoraThemeId: 'github-dark'
+    }).typoraThemeId,
+    'github-dark'
   );
 });
 

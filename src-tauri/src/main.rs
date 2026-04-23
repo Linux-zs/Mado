@@ -6,7 +6,7 @@ use std::{
   path::{Path, PathBuf},
   process::Command,
   sync::Mutex,
-  time::UNIX_EPOCH,
+  time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,8 @@ const MENU_APPEARANCE_THEME_SYSTEM_ID: &str = "appearance-theme:system";
 const MENU_APPEARANCE_THEME_LIGHT_ID: &str = "appearance-theme:light";
 const MENU_APPEARANCE_THEME_DARK_ID: &str = "appearance-theme:dark";
 const MENU_APPEARANCE_FONT_PANEL_OPEN_ID: &str = "appearance-font-panel:open";
+const MENU_APPEARANCE_TYPORA_THEME_PANEL_OPEN_ID: &str = "appearance-typora-theme-panel:open";
+const MENU_APPEARANCE_TYPORA_THEME_IMPORT_ID: &str = "appearance-typora-theme:import";
 const RECENT_FILES_MENU_LIMIT: usize = 10;
 const APP_COMMAND_EVENT: &str = "request-app-command";
 const EDITOR_COMMAND_MENU_PREFIX: &str = "editor-command:";
@@ -81,6 +83,8 @@ enum AppCommandPayload {
   ClearRecentFiles,
   OpenRecentFile { path: String },
   OpenPendingExternalFiles,
+  OpenTyporaThemePanel,
+  ImportTyporaTheme,
   EditCommand {
     #[serde(rename = "commandId")]
     command_id: String,
@@ -99,6 +103,7 @@ enum AppCommandPayload {
 #[serde(rename_all = "camelCase")]
 struct AppearanceMenuState {
   theme: String,
+  typora_theme_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -163,6 +168,16 @@ struct RecentMenuEntry {
 
 struct RecentFileMenuState(Mutex<Vec<RecentMenuEntry>>);
 struct PendingOpenPaths(Mutex<Vec<String>>);
+struct AppearanceMenuStateStore(Mutex<AppearanceMenuState>);
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedTyporaTheme {
+  id: String,
+  name: String,
+  css_path: String,
+  imported_at: u64,
+}
 
 #[derive(Clone, Copy)]
 struct TextFileScanLimits {
@@ -260,6 +275,12 @@ fn update_menu_enabled_states(app: AppHandle, states: Vec<MenuEnabledState>) -> 
 
 #[tauri::command]
 fn update_appearance_menu_state(app: AppHandle, state: AppearanceMenuState) -> Result<(), String> {
+  if let Some(state_store) = app.try_state::<AppearanceMenuStateStore>() {
+    if let Ok(mut current) = state_store.0.lock() {
+      *current = state.clone();
+    }
+  }
+
   sync_appearance_menu_state(&app, &state).map_err(|error| error.to_string())
 }
 
@@ -1182,8 +1203,24 @@ fn build_appearance_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submen
     )?)
     .build()?;
 
+  let typora_theme_menu = SubmenuBuilder::new(app, "Typora \u{4e3b}\u{9898}")
+    .item(&menu_item(
+      app,
+      typora_theme_panel_menu_item_id(),
+      "\u{9009}\u{62e9}...",
+      None,
+    )?)
+    .item(&menu_item(
+      app,
+      typora_theme_import_menu_item_id(),
+      "\u{5bfc}\u{5165}...",
+      None,
+    )?)
+    .build()?;
+
   SubmenuBuilder::new(app, "\u{5916}\u{89c2}(&A)")
     .item(&theme_menu)
+    .item(&typora_theme_menu)
     .item(&menu_item(
       app,
       appearance_font_panel_menu_item_id(),
@@ -1718,6 +1755,369 @@ fn take_pending_open_paths(state: State<'_, PendingOpenPaths>) -> Result<Vec<Str
   Ok(std::mem::take(&mut *pending))
 }
 
+fn default_appearance_menu_state() -> AppearanceMenuState {
+  AppearanceMenuState {
+    theme: "system".to_string(),
+    typora_theme_id: None,
+  }
+}
+
+fn typora_theme_panel_menu_item_id() -> &'static str {
+  MENU_APPEARANCE_TYPORA_THEME_PANEL_OPEN_ID
+}
+
+fn typora_theme_import_menu_item_id() -> &'static str {
+  MENU_APPEARANCE_TYPORA_THEME_IMPORT_ID
+}
+
+fn typora_themes_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+  let root = app
+    .path()
+    .app_local_data_dir()
+    .map_err(|error| format!("Failed to resolve app local data directory: {error}"))?
+    .join("themes")
+    .join("typora");
+
+  fs::create_dir_all(&root).map_err(|error| format!("Failed to create typora theme directory: {error}"))?;
+  Ok(root)
+}
+
+fn typora_theme_metadata_path(theme_dir: &Path) -> PathBuf {
+  theme_dir.join("theme.json")
+}
+
+fn typora_theme_files_root(theme_dir: &Path) -> PathBuf {
+  theme_dir.join("files")
+}
+
+fn sanitize_typora_theme_id_component(value: &str) -> String {
+  let mut sanitized = String::new();
+
+  for character in value.chars() {
+    if character.is_ascii_alphanumeric() {
+      sanitized.push(character.to_ascii_lowercase());
+    } else if (character == '-' || character == '_' || character.is_whitespace()) && !sanitized.ends_with('-') {
+      sanitized.push('-');
+    }
+  }
+
+  sanitized.trim_matches('-').to_string()
+}
+
+fn create_typora_theme_id(theme_name: &str) -> String {
+  let base = sanitize_typora_theme_id_component(theme_name);
+  let stamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("system time should be valid")
+    .as_millis();
+
+  if base.is_empty() {
+    format!("typora-theme-{stamp}")
+  } else {
+    format!("{base}-{stamp}")
+  }
+}
+
+fn normalize_local_css_reference(reference: &str) -> Option<String> {
+  let trimmed = reference
+    .trim()
+    .trim_matches(';')
+    .trim_matches('"')
+    .trim_matches('\'')
+    .trim();
+
+  if trimmed.is_empty()
+    || trimmed.starts_with("http://")
+    || trimmed.starts_with("https://")
+    || trimmed.starts_with("data:")
+    || trimmed.starts_with('#')
+  {
+    return None;
+  }
+
+  Some(trimmed.replace('\\', "/"))
+}
+
+fn extract_css_reference_candidates(content: &str) -> Vec<String> {
+  let mut references = Vec::new();
+
+  let mut url_search = content;
+  while let Some(index) = url_search.find("url(") {
+    url_search = &url_search[index + 4..];
+
+    let Some(end_index) = url_search.find(')') else {
+      break;
+    };
+
+    if let Some(reference) = normalize_local_css_reference(&url_search[..end_index]) {
+      references.push(reference);
+    }
+
+    url_search = &url_search[end_index + 1..];
+  }
+
+  let mut import_search = content;
+  while let Some(index) = import_search.find("@import") {
+    import_search = &import_search[index + "@import".len()..];
+    let trimmed = import_search.trim_start();
+
+    if let Some(rest) = trimmed.strip_prefix("url(") {
+      if let Some(end_index) = rest.find(')') {
+        if let Some(reference) = normalize_local_css_reference(&rest[..end_index]) {
+          references.push(reference);
+        }
+
+        import_search = &rest[end_index + 1..];
+        continue;
+      }
+    }
+
+    if let Some(quote) = trimmed.chars().next().filter(|character| *character == '"' || *character == '\'') {
+      let rest = &trimmed[quote.len_utf8()..];
+
+      if let Some(end_index) = rest.find(quote) {
+        if let Some(reference) = normalize_local_css_reference(&rest[..end_index]) {
+          references.push(reference);
+        }
+
+        import_search = &rest[end_index + quote.len_utf8()..];
+        continue;
+      }
+    }
+
+    import_search = trimmed;
+  }
+
+  references
+}
+
+fn collect_typora_theme_dependency_paths(
+  entry_css_path: &Path,
+  source_root: &Path,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+  let mut css_queue = vec![entry_css_path.to_path_buf()];
+  let mut files = std::collections::BTreeSet::new();
+  let mut directories = std::collections::BTreeSet::new();
+
+  while let Some(css_path) = css_queue.pop() {
+    if !files.insert(css_path.clone()) {
+      continue;
+    }
+
+    let sibling_directory = css_path.with_extension("");
+    if sibling_directory.is_dir() {
+      directories.insert(sibling_directory);
+    }
+
+    let decoded = read_text_file(&css_path)?;
+    let parent = css_path
+      .parent()
+      .ok_or_else(|| "Failed to resolve typora theme parent directory.".to_string())?;
+
+    for reference in extract_css_reference_candidates(&decoded.content) {
+      let resolved = parent.join(&reference);
+
+      if !resolved.exists() {
+        continue;
+      }
+
+      let canonical = resolved
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve typora theme dependency: {error}"))?;
+
+      if canonical.strip_prefix(source_root).is_err() {
+        return Err("The selected Typora theme references files outside its theme directory.".to_string());
+      }
+
+      if canonical.is_dir() {
+        directories.insert(canonical);
+        continue;
+      }
+
+      files.insert(canonical.clone());
+
+      if canonical
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("css"))
+      {
+        css_queue.push(canonical);
+      }
+    }
+  }
+
+  Ok((files.into_iter().collect(), directories.into_iter().collect()))
+}
+
+fn copy_theme_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+  fs::create_dir_all(target).map_err(|error| format!("Failed to create theme asset directory: {error}"))?;
+
+  for entry in fs::read_dir(source).map_err(|error| format!("Failed to read theme asset directory: {error}"))? {
+    let entry = entry.map_err(|error| format!("Failed to read theme asset entry: {error}"))?;
+    let source_path = entry.path();
+    let target_path = target.join(entry.file_name());
+    let file_type = entry
+      .file_type()
+      .map_err(|error| format!("Failed to inspect theme asset entry: {error}"))?;
+
+    if file_type.is_dir() {
+      copy_theme_directory_recursive(&source_path, &target_path)?;
+    } else if file_type.is_file() {
+      if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("Failed to create theme asset parent directory: {error}"))?;
+      }
+
+      fs::copy(&source_path, &target_path).map_err(|error| format!("Failed to copy theme asset file: {error}"))?;
+    }
+  }
+
+  Ok(())
+}
+
+fn list_imported_typora_themes_internal<R: Runtime>(
+  app: &AppHandle<R>,
+) -> Result<Vec<ImportedTyporaTheme>, String> {
+  let root = typora_themes_root(app)?;
+  let mut themes = Vec::new();
+
+  for entry in fs::read_dir(root).map_err(|error| format!("Failed to read typora theme directory: {error}"))? {
+    let entry = entry.map_err(|error| format!("Failed to read typora theme entry: {error}"))?;
+    let theme_dir = entry.path();
+
+    if !theme_dir.is_dir() {
+      continue;
+    }
+
+    let metadata_path = typora_theme_metadata_path(&theme_dir);
+
+    if !metadata_path.is_file() {
+      continue;
+    }
+
+    let content = fs::read_to_string(&metadata_path)
+      .map_err(|error| format!("Failed to read typora theme metadata: {error}"))?;
+    let theme = serde_json::from_str::<ImportedTyporaTheme>(&content)
+      .map_err(|error| format!("Failed to parse typora theme metadata: {error}"))?;
+
+    if Path::new(&theme.css_path).is_file() {
+      themes.push(theme);
+    }
+  }
+
+  themes.sort_by(|left, right| {
+    left
+      .name
+      .to_lowercase()
+      .cmp(&right.name.to_lowercase())
+      .then_with(|| left.imported_at.cmp(&right.imported_at))
+  });
+
+  Ok(themes)
+}
+
+fn rebuild_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+  let menu = build_app_menu(app).map_err(|error| error.to_string())?;
+  app.set_menu(menu).map_err(|error| error.to_string())?;
+
+  let Some(state_store) = app.try_state::<AppearanceMenuStateStore>() else {
+    return Ok(());
+  };
+
+  let Ok(state) = state_store.0.lock() else {
+    return Ok(());
+  };
+
+  sync_appearance_menu_state(app, &state).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_imported_typora_themes(app: AppHandle) -> Result<Vec<ImportedTyporaTheme>, String> {
+  list_imported_typora_themes_internal(&app)
+}
+
+#[tauri::command]
+fn import_typora_theme(app: AppHandle, css_path: String) -> Result<ImportedTyporaTheme, String> {
+  let source_css_path = PathBuf::from(css_path.trim());
+
+  if !source_css_path.is_file() {
+    return Err("The selected Typora theme file does not exist.".to_string());
+  }
+
+  if !source_css_path
+    .extension()
+    .and_then(|extension| extension.to_str())
+    .is_some_and(|extension| extension.eq_ignore_ascii_case("css"))
+  {
+    return Err("Please choose a Typora theme CSS file.".to_string());
+  }
+
+  let source_root = source_css_path
+    .parent()
+    .ok_or_else(|| "Failed to resolve Typora theme directory.".to_string())?
+    .canonicalize()
+    .map_err(|error| format!("Failed to resolve Typora theme directory: {error}"))?;
+  let entry_css_path = source_css_path
+    .canonicalize()
+    .map_err(|error| format!("Failed to resolve Typora theme file: {error}"))?;
+  let theme_name = entry_css_path
+    .file_stem()
+    .and_then(|value| value.to_str())
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .unwrap_or("Typora Theme")
+    .to_string();
+  let theme_id = create_typora_theme_id(&theme_name);
+  let theme_root = typora_themes_root(&app)?.join(&theme_id);
+  let files_root = typora_theme_files_root(&theme_root);
+  let (files, directories) = collect_typora_theme_dependency_paths(&entry_css_path, &source_root)?;
+
+  fs::create_dir_all(&files_root).map_err(|error| format!("Failed to create theme import directory: {error}"))?;
+
+  for directory in directories {
+    let relative_path = directory
+      .strip_prefix(&source_root)
+      .map_err(|_| "The selected Typora theme references folders outside its theme directory.".to_string())?;
+    let target_directory = files_root.join(relative_path);
+    copy_theme_directory_recursive(&directory, &target_directory)?;
+  }
+
+  for file in files {
+    let relative_path = file
+      .strip_prefix(&source_root)
+      .map_err(|_| "The selected Typora theme references files outside its theme directory.".to_string())?;
+    let target_file = files_root.join(relative_path);
+
+    if let Some(parent) = target_file.parent() {
+      fs::create_dir_all(parent).map_err(|error| format!("Failed to create imported theme directory: {error}"))?;
+    }
+
+    fs::copy(&file, &target_file).map_err(|error| format!("Failed to copy Typora theme file: {error}"))?;
+  }
+
+  let relative_css_path = entry_css_path
+    .strip_prefix(&source_root)
+    .map_err(|_| "Failed to preserve the Typora theme CSS path.".to_string())?;
+  let imported_at = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("system time should be valid")
+    .as_millis() as u64;
+  let imported_theme = ImportedTyporaTheme {
+    id: theme_id.clone(),
+    name: theme_name,
+    css_path: files_root.join(relative_css_path).to_string_lossy().into_owned(),
+    imported_at,
+  };
+
+  let metadata = serde_json::to_string_pretty(&imported_theme)
+    .map_err(|error| format!("Failed to serialize Typora theme metadata: {error}"))?;
+  fs::write(typora_theme_metadata_path(&theme_root), metadata)
+    .map_err(|error| format!("Failed to persist Typora theme metadata: {error}"))?;
+
+  rebuild_app_menu(&app)?;
+
+  Ok(imported_theme)
+}
+
 fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
   match menu_id {
     MENU_NEW_FILE_ID => Some(AppCommandPayload::NewFile),
@@ -1749,6 +2149,8 @@ fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
       theme: "dark".to_string(),
     }),
     MENU_APPEARANCE_FONT_PANEL_OPEN_ID => Some(AppCommandPayload::OpenAppearanceFontPanel),
+    MENU_APPEARANCE_TYPORA_THEME_PANEL_OPEN_ID => Some(AppCommandPayload::OpenTyporaThemePanel),
+    MENU_APPEARANCE_TYPORA_THEME_IMPORT_ID => Some(AppCommandPayload::ImportTyporaTheme),
     MENU_CLEAR_RECENT_FILES_ID => Some(AppCommandPayload::ClearRecentFiles),
     _ => None,
   }
@@ -1768,6 +2170,7 @@ fn main() {
     }))
     .manage(RecentFileMenuState(Mutex::new(Vec::new())))
     .manage(PendingOpenPaths(Mutex::new(Vec::new())))
+    .manage(AppearanceMenuStateStore(Mutex::new(default_appearance_menu_state())))
     .invoke_handler(tauri::generate_handler![
       open_markdown_file,
       list_text_files,
@@ -1783,6 +2186,8 @@ fn main() {
       validate_markdown_save_path,
       take_pending_open_paths,
       list_installed_font_families,
+      list_imported_typora_themes,
+      import_typora_theme,
       update_recent_files_menu,
       update_menu_enabled_states,
       update_appearance_menu_state
@@ -2404,6 +2809,10 @@ mod tests {
       .expect("panel payload should serialize");
     let pending_open_value = serde_json::to_value(AppCommandPayload::OpenPendingExternalFiles)
       .expect("pending external open payload should serialize");
+    let typora_panel_value = serde_json::to_value(AppCommandPayload::OpenTyporaThemePanel)
+      .expect("typora panel payload should serialize");
+    let typora_import_value = serde_json::to_value(AppCommandPayload::ImportTyporaTheme)
+      .expect("typora import payload should serialize");
 
     assert_eq!(
       theme_value,
@@ -2422,6 +2831,18 @@ mod tests {
       pending_open_value,
       json!({
         "type": "openPendingExternalFiles"
+      })
+    );
+    assert_eq!(
+      typora_panel_value,
+      json!({
+        "type": "openTyporaThemePanel"
+      })
+    );
+    assert_eq!(
+      typora_import_value,
+      json!({
+        "type": "importTyporaTheme"
       })
     );
   }
@@ -2480,6 +2901,14 @@ mod tests {
     assert!(matches!(
       app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_OPEN_ID),
       Some(AppCommandPayload::OpenAppearanceFontPanel)
+    ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_TYPORA_THEME_PANEL_OPEN_ID),
+      Some(AppCommandPayload::OpenTyporaThemePanel)
+    ));
+    assert!(matches!(
+      app_command_for_menu_id(MENU_APPEARANCE_TYPORA_THEME_IMPORT_ID),
+      Some(AppCommandPayload::ImportTyporaTheme)
     ));
 
     assert!(app_command_for_menu_id("missing-menu-id").is_none());
