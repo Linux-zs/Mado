@@ -49,6 +49,11 @@
   --color-floating-shadow: rgba(35, 27, 18, 0.12);
   --color-floating-text: rgba(60, 49, 35, 0.82);
   --color-floating-muted: rgba(60, 49, 35, 0.46);
+  --color-mark-bg: rgba(255, 220, 86, 0.5);
+  --color-mark-text: #2a241e;
+  --color-kbd-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(243, 239, 232, 0.96) 100%);
+  --color-kbd-border: rgba(60, 49, 35, 0.24);
+  --color-kbd-text: #2f2a24;
   --color-control-surface: rgba(255, 252, 245, 0.96);
   --color-accent-soft: rgba(154, 115, 69, 0.18);
   --color-accent: rgba(154, 115, 69, 0.72);
@@ -103,6 +108,11 @@
   --color-floating-shadow: rgba(0, 0, 0, 0.32);
   --color-floating-text: rgba(250, 243, 234, 0.9);
   --color-floating-muted: rgba(217, 206, 193, 0.58);
+  --color-mark-bg: rgba(255, 184, 108, 0.32);
+  --color-mark-text: #fff5e8;
+  --color-kbd-bg: linear-gradient(180deg, rgba(72, 63, 54, 0.98) 0%, rgba(52, 46, 40, 0.96) 100%);
+  --color-kbd-border: rgba(255, 255, 255, 0.18);
+  --color-kbd-text: #faf3ea;
   --color-control-surface: rgba(52, 46, 40, 0.96);
   --color-accent-soft: rgba(255, 184, 108, 0.16);
   --color-accent: rgba(255, 184, 108, 0.66);
@@ -157,6 +167,11 @@
   --color-floating-shadow: rgba(0, 0, 0, 0.34);
   --color-floating-text: rgba(215, 218, 224, 0.9);
   --color-floating-muted: rgba(171, 178, 191, 0.6);
+  --color-mark-bg: rgba(229, 192, 123, 0.28);
+  --color-mark-text: #f0f3f8;
+  --color-kbd-bg: linear-gradient(180deg, rgba(64, 72, 84, 0.98) 0%, rgba(48, 54, 64, 0.96) 100%);
+  --color-kbd-border: rgba(171, 178, 191, 0.22);
+  --color-kbd-text: #d7dae0;
   --color-control-surface: rgba(48, 54, 64, 0.96);
   --color-accent-soft: rgba(97, 175, 239, 0.15);
   --color-accent: rgba(97, 175, 239, 0.72);
@@ -211,6 +226,11 @@
   --color-floating-shadow: rgba(0, 0, 0, 0.38);
   --color-floating-text: rgba(248, 248, 242, 0.92);
   --color-floating-muted: rgba(248, 248, 242, 0.58);
+  --color-mark-bg: rgba(241, 250, 140, 0.24);
+  --color-mark-text: #f8f8f2;
+  --color-kbd-bg: linear-gradient(180deg, rgba(64, 67, 84, 0.98) 0%, rgba(52, 55, 70, 0.96) 100%);
+  --color-kbd-border: rgba(189, 147, 249, 0.28);
+  --color-kbd-text: #f8f8f2;
   --color-control-surface: rgba(52, 55, 70, 0.96);
   --color-accent-soft: rgba(189, 147, 249, 0.16);
   --color-accent: rgba(189, 147, 249, 0.72);
@@ -265,6 +285,11 @@
   --color-floating-shadow: rgba(0, 0, 0, 0.36);
   --color-floating-text: rgba(205, 214, 244, 0.92);
   --color-floating-muted: rgba(186, 194, 222, 0.58);
+  --color-mark-bg: rgba(249, 226, 175, 0.24);
+  --color-mark-text: #f5e0dc;
+  --color-kbd-bg: linear-gradient(180deg, rgba(69, 71, 90, 0.98) 0%, rgba(49, 50, 68, 0.96) 100%);
+  --color-kbd-border: rgba(203, 166, 247, 0.28);
+  --color-kbd-text: #cdd6f4;
   --color-control-surface: rgba(49, 50, 68, 0.96);
   --color-accent-soft: rgba(203, 166, 247, 0.16);
   --color-accent: rgba(203, 166, 247, 0.72);
@@ -319,6 +344,11 @@
   --color-floating-shadow: rgba(0, 0, 0, 0.38);
   --color-floating-text: rgba(214, 222, 235, 0.92);
   --color-floating-muted: rgba(183, 197, 211, 0.58);
+  --color-mark-bg: rgba(255, 203, 139, 0.24);
+  --color-mark-text: #d6deeb;
+  --color-kbd-bg: linear-gradient(180deg, rgba(16, 53, 82, 0.98) 0%, rgba(11, 41, 66, 0.96) 100%);
+  --color-kbd-border: rgba(130, 170, 255, 0.28);
+  --color-kbd-text: #d6deeb;
   --color-control-surface: rgba(11, 41, 66, 0.96);
   --color-accent-soft: rgba(130, 170, 255, 0.16);
   --color-accent: rgba(130, 170, 255, 0.72);
@@ -373,6 +403,11 @@
   --color-floating-shadow: rgba(0, 0, 0, 0.36);
   --color-floating-text: rgba(192, 202, 245, 0.92);
   --color-floating-muted: rgba(169, 177, 214, 0.58);
+  --color-mark-bg: rgba(224, 175, 104, 0.24);
+  --color-mark-text: #e0e7ff;
+  --color-kbd-bg: linear-gradient(180deg, rgba(55, 61, 86, 0.98) 0%, rgba(41, 46, 66, 0.96) 100%);
+  --color-kbd-border: rgba(122, 162, 247, 0.26);
+  --color-kbd-text: #c0caf5;
   --color-control-surface: rgba(41, 46, 66, 0.96);
   --color-accent-soft: rgba(122, 162, 247, 0.16);
   --color-accent: rgba(122, 162, 247, 0.72);
@@ -427,6 +462,11 @@
   --color-floating-shadow: rgba(31, 35, 40, 0.14);
   --color-floating-text: rgba(36, 41, 47, 0.9);
   --color-floating-muted: rgba(87, 96, 106, 0.68);
+  --color-mark-bg: rgba(255, 223, 93, 0.48);
+  --color-mark-text: #24292f;
+  --color-kbd-bg: linear-gradient(180deg, #ffffff 0%, #f6f8fa 100%);
+  --color-kbd-border: rgba(31, 35, 40, 0.2);
+  --color-kbd-text: #24292f;
   --color-control-surface: #ffffff;
   --color-accent-soft: rgba(9, 105, 218, 0.12);
   --color-accent: rgba(9, 105, 218, 0.68);
@@ -1350,8 +1390,8 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .milkdown-host .ProseMirror mark {
   padding: 0.04em 0.18em;
-  background: #ffef63;
-  color: #2a241e;
+  background: var(--color-mark-bg);
+  color: var(--color-mark-text);
 }
 
 .milkdown-host .ProseMirror sub,
@@ -1375,13 +1415,13 @@ body.is-resizing-layout .workspace-resize-handle::after,
   min-width: 1.35em;
   margin: 0 0.08em;
   padding: 0.08em 0.42em 0.14em;
-  border: 1px solid rgba(60, 49, 35, 0.24);
+  border: 1px solid var(--color-kbd-border);
   border-radius: 5px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(243, 239, 232, 0.96) 100%);
+  background: var(--color-kbd-bg);
   box-shadow:
     inset 0 -1px 0 rgba(60, 49, 35, 0.12),
     0 1px 2px rgba(60, 49, 35, 0.08);
-  color: #2f2a24;
+  color: var(--color-kbd-text);
   font: 0.84em/1.2 var(--font-code);
   vertical-align: 0.08em;
 }
@@ -1520,15 +1560,15 @@ body.is-resizing-layout .workspace-resize-handle::after,
   min-width: 28px;
   height: 22px;
   padding: 0 6px;
-  border: 1px solid rgba(154, 115, 69, 0.14);
+  border: 1px solid var(--color-floating-border);
   border-radius: 8px;
-  background: rgba(255, 252, 245, 0.9);
-  color: rgba(95, 75, 45, 0.34);
-  box-shadow: 0 4px 14px rgba(43, 33, 22, 0.05);
+  background: var(--color-floating-surface);
+  color: var(--color-floating-muted);
+  box-shadow: 0 4px 14px var(--color-floating-shadow);
   font: 600 11px/1 var(--font-code);
   text-transform: lowercase;
   cursor: pointer;
-  opacity: 0.46;
+  opacity: 0.68;
   transition:
     opacity 140ms ease,
     color 140ms ease,
@@ -1539,11 +1579,11 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .heading-level-badge:hover,
 .heading-marker-overlay.is-open .heading-level-badge {
-  border-color: rgba(154, 115, 69, 0.24);
-  background: rgba(255, 252, 245, 0.98);
-  color: rgba(60, 49, 35, 0.82);
-  box-shadow: 0 8px 18px rgba(43, 33, 22, 0.08);
-  opacity: 0.9;
+  border-color: var(--color-accent);
+  background: var(--color-floating-surface);
+  color: var(--color-floating-text);
+  box-shadow: 0 8px 18px var(--color-floating-shadow);
+  opacity: 0.96;
 }
 
 .heading-level-menu {
@@ -1555,10 +1595,10 @@ body.is-resizing-layout .workspace-resize-handle::after,
   gap: 2px;
   min-width: 176px;
   padding: 8px;
-  border: 1px solid rgba(60, 49, 35, 0.09);
+  border: 1px solid var(--color-floating-border);
   border-radius: 12px;
-  background: rgba(255, 251, 244, 0.98);
-  box-shadow: 0 18px 36px rgba(35, 27, 18, 0.12);
+  background: var(--color-floating-surface);
+  box-shadow: 0 18px 36px var(--color-floating-shadow);
   opacity: 1;
   transform: translateY(0);
   transition:
@@ -1575,7 +1615,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .format-menu-label {
   padding: 2px 10px 4px;
-  color: rgba(60, 49, 35, 0.42);
+  color: var(--color-floating-muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1584,7 +1624,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
 .format-menu-divider {
   height: 1px;
   margin: 6px 4px;
-  background: rgba(60, 49, 35, 0.09);
+  background: var(--color-floating-border);
 }
 
 .heading-level-option {
@@ -1593,7 +1633,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: rgba(42, 36, 30, 0.78);
+  color: var(--color-floating-text);
   text-align: left;
   font-size: 13px;
   line-height: 1.4;
@@ -1606,7 +1646,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: rgba(42, 36, 30, 0.78);
+  color: var(--color-floating-text);
   text-align: left;
   font-size: 13px;
   line-height: 1.4;
@@ -1617,8 +1657,8 @@ body.is-resizing-layout .workspace-resize-handle::after,
 .heading-level-option.is-active,
 .inline-format-option:hover,
 .inline-format-option.is-active {
-  background: rgba(154, 115, 69, 0.14);
-  color: #2a241e;
+  background: var(--color-accent-soft);
+  color: var(--color-floating-text);
 }
 
 .milkdown-host .ProseMirror code {

@@ -48,7 +48,7 @@ import {
 } from '@milkdown/prose/tables';
 import { TableMap } from '@milkdown/prose/tables';
 import { history as proseHistory, redo, redoDepth, undo, undoDepth } from '@milkdown/prose/history';
-import type { Node as ProseMirrorNode } from '@milkdown/prose/model';
+import type { MarkType, Node as ProseMirrorNode } from '@milkdown/prose/model';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import type { EditorView } from '@milkdown/prose/view';
 import { nord } from '@milkdown/theme-nord';
@@ -94,6 +94,13 @@ import {
   computeFindMatchActiveIndex,
   getFindMatchStart
 } from './find-replace-state';
+import {
+  createEmptyInlineFormatState,
+  getInlineFormatBadgeText,
+  hasAnyInlineFormat,
+  type InlineFormatState,
+  type InlineStyleId
+} from './inline-format-state';
 import { extendInlineHtmlRemarkHandlers, madoInlineHtmlSupport } from './milkdown-inline-html';
 import { synchronizeMarkdownContent } from './milkdown-sync-state';
 import {
@@ -310,14 +317,6 @@ type HeadingStyleState = {
   style: HeadingMarkdownStyle;
 };
 
-type InlineFormatPreset =
-  | 'plain'
-  | 'strong'
-  | 'emphasis'
-  | 'strong-emphasis'
-  | 'strike'
-  | 'inline-code';
-
 type ActiveHeadingMarkerState =
   | {
       documentId: string;
@@ -328,14 +327,14 @@ type ActiveHeadingMarkerState =
       style: HeadingMarkdownStyle;
       from: number;
       to: number;
-      inlinePreset: InlineFormatPreset | null;
+      inlineFormat: InlineFormatState;
     }
   | {
       documentId: string;
       kind: 'inline';
       from: number;
       to: number;
-      inlinePreset: InlineFormatPreset | null;
+      inlineFormat: InlineFormatState;
     };
 
 type ActiveCodeBlockLanguageEditState = {
@@ -548,13 +547,16 @@ const HEADING_LEVEL_LABELS = [
 const BLOCK_FORMAT_LABEL = '\u6807\u9898';
 const INLINE_FORMAT_LABEL = '\u7279\u6b8a\u6837\u5f0f';
 const BODY_LABEL = '\u6b63\u6587';
-const INLINE_FORMAT_LABELS: Record<InlineFormatPreset, string> = {
+const INLINE_FORMAT_LABELS: Record<InlineStyleId | 'plain', string> = {
   plain: '\u6b63\u6587',
   strong: '\u7c97\u4f53',
   emphasis: '\u659c\u4f53',
-  'strong-emphasis': '\u52a0\u7c97\u659c\u4f53',
   strike: '\u5220\u9664\u7ebf',
-  'inline-code': '\u884c\u5185\u4ee3\u7801'
+  inlineCode: '\u884c\u5185\u4ee3\u7801',
+  highlight: '\u9ad8\u4eae',
+  superscript: '\u4e0a\u6807',
+  subscript: '\u4e0b\u6807',
+  kbd: '\u6309\u94ae'
 };
 
 const EDITOR_COMMAND_IDS = {
@@ -594,6 +596,19 @@ const EDITOR_COMMAND_IDS = {
 } as const;
 
 type EditorCommandId = (typeof EDITOR_COMMAND_IDS)[keyof typeof EDITOR_COMMAND_IDS];
+const INLINE_FORMAT_MENU_ITEMS: readonly {
+  style: InlineStyleId;
+  commandId: EditorCommandId;
+}[] = [
+  { style: 'strong', commandId: EDITOR_COMMAND_IDS.inlineStrong },
+  { style: 'emphasis', commandId: EDITOR_COMMAND_IDS.inlineEmphasis },
+  { style: 'strike', commandId: EDITOR_COMMAND_IDS.inlineStrike },
+  { style: 'inlineCode', commandId: EDITOR_COMMAND_IDS.inlineCode },
+  { style: 'highlight', commandId: EDITOR_COMMAND_IDS.inlineHighlight },
+  { style: 'superscript', commandId: EDITOR_COMMAND_IDS.inlineSuperscript },
+  { style: 'subscript', commandId: EDITOR_COMMAND_IDS.inlineSubscript },
+  { style: 'kbd', commandId: EDITOR_COMMAND_IDS.inlineKbd }
+];
 type AppCommandPayload =
   | { type: 'newFile' }
   | { type: 'openFile' }
@@ -5771,94 +5786,63 @@ function getHeadingLevelBadgeText(level: 1 | 2 | 3 | 4 | 5 | 6): string {
   return `h${level}`;
 }
 
-function getInlinePresetBadgeText(preset: InlineFormatPreset | null): string {
-  switch (preset) {
-    case 'strong':
-      return 'B';
-    case 'emphasis':
-      return 'I';
-    case 'strong-emphasis':
-      return 'BI';
-    case 'strike':
-      return 'S';
-    case 'inline-code':
-      return '<>';
-    case 'plain':
-      return 'Tx';
-    default:
-      return 'Fmt';
-  }
-}
-
-function getInlinePresetFromMarks(
-  marks: readonly { type: { name: string } }[]
-): InlineFormatPreset | null {
-  let hasStrong = false;
-  let hasEmphasis = false;
-  let hasStrike = false;
-  let hasInlineCode = false;
-
+function getInlineFormatStateFromMarks(marks: readonly { type: { name: string } }[]): InlineFormatState {
+  const state = createEmptyInlineFormatState();
   for (const mark of marks) {
     switch (mark.type.name) {
       case 'strong':
-        hasStrong = true;
+        state.strong = true;
         break;
       case 'em':
       case 'emphasis':
-        hasEmphasis = true;
+        state.emphasis = true;
         break;
       case 'strike':
       case 'strikethrough':
       case 'strike_through':
-        hasStrike = true;
+        state.strike = true;
         break;
       case 'code':
       case 'inline_code':
-        hasInlineCode = true;
+        state.inlineCode = true;
+        break;
+      case 'madoHighlight':
+        state.highlight = true;
+        break;
+      case 'madoSuperscript':
+        state.superscript = true;
+        break;
+      case 'madoSubscript':
+        state.subscript = true;
+        break;
+      case 'madoKeyboard':
+        state.kbd = true;
         break;
       default:
         break;
     }
   }
 
-  if (hasInlineCode && (hasStrong || hasEmphasis || hasStrike)) {
-    return null;
-  }
-
-  if (hasStrike && (hasStrong || hasEmphasis)) {
-    return null;
-  }
-
-  if (hasInlineCode) {
-    return 'inline-code';
-  }
-
-  if (hasStrong && hasEmphasis) {
-    return 'strong-emphasis';
-  }
-
-  if (hasStrong) {
-    return 'strong';
-  }
-
-  if (hasEmphasis) {
-    return 'emphasis';
-  }
-
-  if (hasStrike) {
-    return 'strike';
-  }
-
-  return 'plain';
+  return state;
 }
 
-function getInlinePresetForRange(
+function mergeInlineFormatState(target: InlineFormatState, source: InlineFormatState): void {
+  for (const style of Object.keys(target) as InlineStyleId[]) {
+    target[style] ||= source[style];
+  }
+}
+
+function inlineFormatStatesEqual(left: InlineFormatState, right: InlineFormatState): boolean {
+  return (Object.keys(left) as InlineStyleId[]).every((style) => left[style] === right[style]);
+}
+
+function getInlineFormatStateForRange(
   doc: EditorView['state']['doc'],
   from: number,
   to: number
-): InlineFormatPreset | null {
+): InlineFormatState {
   let hasText = false;
-  let activePreset: InlineFormatPreset | null | undefined;
+  const state = createEmptyInlineFormatState();
 
   doc.nodesBetween(from, to, (node, position) => {
     if (!node.isText) {
@@ -5873,50 +5857,40 @@ function getInlinePresetForRange(
     }
 
     hasText = true;
-    const nodePreset = getInlinePresetFromMarks(node.marks);
-
-    if (activePreset === undefined) {
-      activePreset = nodePreset;
-      return false;
-    }
-
-    if (activePreset !== nodePreset) {
-      activePreset = null;
-    }
-
+    mergeInlineFormatState(state, getInlineFormatStateFromMarks(node.marks));
     return false;
   });
 
   if (!hasText) {
-    return 'plain';
+    return createEmptyInlineFormatState();
   }
 
-  return activePreset ?? 'plain';
+  return state;
 }
 
-function getInlinePresetAtPosition(
+function getInlineFormatStateAtPosition(
   doc: EditorView['state']['doc'],
   pos: number
-): InlineFormatPreset | null {
+): InlineFormatState {
   const $pos = doc.resolve(pos);
-  const marksAtPos = getInlinePresetFromMarks($pos.marks());
+  const marksAtPos = getInlineFormatStateFromMarks($pos.marks());
 
-  if (marksAtPos && marksAtPos !== 'plain') {
+  if (hasAnyInlineFormat(marksAtPos)) {
     return marksAtPos;
   }
 
   if ($pos.nodeBefore?.isText) {
-    const beforePreset = getInlinePresetFromMarks($pos.nodeBefore.marks);
+    const beforePreset = getInlineFormatStateFromMarks($pos.nodeBefore.marks);
 
-    if (beforePreset && beforePreset !== 'plain') {
+    if (hasAnyInlineFormat(beforePreset)) {
       return beforePreset;
     }
   }
 
   if ($pos.nodeAfter?.isText) {
-    const afterPreset = getInlinePresetFromMarks($pos.nodeAfter.marks);
+    const afterPreset = getInlineFormatStateFromMarks($pos.nodeAfter.marks);
 
-    if (afterPreset && afterPreset !== 'plain') {
+    if (hasAnyInlineFormat(afterPreset)) {
       return afterPreset;
     }
   }
@@ -5926,16 +5900,16 @@ function getInlinePresetAtPosition(
 
 function getInlineRangeAtCursor(
   view: EditorView
-): { from: number; to: number; preset: InlineFormatPreset | null } | null {
+): { from: number; to: number; inlineFormat: InlineFormatState } | null {
   const { selection, doc } = view.state;
 
   if (!selection.empty || selection.$from.parent.type.name !== 'paragraph') {
     return null;
   }
 
-  const preset = getInlinePresetAtPosition(doc, selection.from);
+  const inlineFormat = getInlineFormatStateAtPosition(doc, selection.from);
 
-  if (!preset || preset === 'plain') {
+  if (!hasAnyInlineFormat(inlineFormat)) {
     return null;
   }
 
@@ -5944,11 +5918,17 @@ function getInlineRangeAtCursor(
   let from = selection.from;
   let to = selection.from;
 
-  while (from > parentStart && getInlinePresetAtPosition(doc, from - 1) === preset) {
+  while (
+    from > parentStart &&
+    inlineFormatStatesEqual(getInlineFormatStateAtPosition(doc, from - 1), inlineFormat)
+  ) {
     from -= 1;
   }
 
-  while (to < parentEnd && getInlinePresetAtPosition(doc, to) === preset) {
+  while (
+    to < parentEnd &&
+    inlineFormatStatesEqual(getInlineFormatStateAtPosition(doc, to), inlineFormat)
+  ) {
     to += 1;
   }
 
@@ -5959,7 +5939,7 @@ function getInlineRangeAtCursor(
   return {
     from,
     to,
-    preset
+    inlineFormat
   };
 }
 
@@ -6017,18 +5997,28 @@ function setHeadingMarkerMenuContent(state: ActiveHeadingMarkerState): void {
     appendLabel(INLINE_FORMAT_LABEL);
   }
 
-  (
-    ['plain', 'strong', 'emphasis', 'strong-emphasis', 'strike', 'inline-code'] as InlineFormatPreset[]
-  ).forEach((preset) => {
+  appendOption(
+    `Tx ${INLINE_FORMAT_LABELS.plain}`,
+    !hasAnyInlineFormat(state.inlineFormat),
+    () => {
+      applyInlineFormatSelection('plain');
+    },
+    'inline-format-option'
+  );
+
+  for (const item of INLINE_FORMAT_MENU_ITEMS) {
     appendOption(
-      `${getInlinePresetBadgeText(preset)} ${INLINE_FORMAT_LABELS[preset]}`,
-      state.inlinePreset === preset,
+      `${getInlineFormatBadgeText({
+        ...createEmptyInlineFormatState(),
+        [item.style]: true
+      })} ${INLINE_FORMAT_LABELS[item.style]}`,
+      state.inlineFormat[item.style],
       () => {
-        applyInlineFormatSelection(preset);
+        applyInlineFormatSelection(item.style);
       },
       'inline-format-option'
     );
-  });
+  }
 }
 
 function setHeadingMarkerMenuOpen(nextOpen: boolean): void {
@@ -6125,7 +6115,7 @@ function renderHeadingMarkerOverlay(documentId: string): void {
         style: nextStyle,
         from: headingFrom,
         to: headingTo,
-        inlinePreset: getInlinePresetForRange(view.state.doc, headingFrom, headingTo)
+        inlineFormat: getInlineFormatStateForRange(view.state.doc, headingFrom, headingTo)
       };
 
       const hostBounds = milkdownHost.getBoundingClientRect();
@@ -6149,11 +6139,11 @@ function renderHeadingMarkerOverlay(documentId: string): void {
         kind: 'inline',
         from: selection.from,
         to: selection.to,
-        inlinePreset: getInlinePresetForRange(view.state.doc, selection.from, selection.to)
+        inlineFormat: getInlineFormatStateForRange(view.state.doc, selection.from, selection.to)
       };
       nextTop = Math.max(0, fromCoords.top - hostBounds.top - 30);
       nextLeft = Math.max(0, fromCoords.left - hostBounds.left);
-      badgeText = getInlinePresetBadgeText(nextState.inlinePreset);
+      badgeText = getInlineFormatBadgeText(nextState.inlineFormat);
       badgeLabel = '\u70b9\u51fb\u4fee\u6539\u6587\u672c\u6837\u5f0f';
     } else {
       const inlineRange = getInlineRangeAtCursor(view);
@@ -6165,11 +6155,11 @@ function renderHeadingMarkerOverlay(documentId: string): void {
           kind: 'inline',
           from: inlineRange.from,
           to: inlineRange.to,
-          inlinePreset: inlineRange.preset
+          inlineFormat: inlineRange.inlineFormat
         };
         nextTop = Math.max(0, fromCoords.top - hostBounds.top - 30);
         nextLeft = Math.max(0, fromCoords.left - hostBounds.left);
-        badgeText = getInlinePresetBadgeText(inlineRange.preset);
+        badgeText = getInlineFormatBadgeText(inlineRange.inlineFormat);
         badgeLabel = '\u70b9\u51fb\u4fee\u6539\u6587\u672c\u6837\u5f0f';
       }
     }
@@ -6770,16 +6760,19 @@ function getSupportedInlineMarkTypes(schema: EditorView['state']['schema']) {
     strong: schema.marks.strong ?? null,
     emphasis: schema.marks.emphasis ?? schema.marks.em ?? null,
     strike: schema.marks.strike_through ?? schema.marks.strikethrough ?? schema.marks.strike ?? null,
-    inlineCode: schema.marks.code ?? schema.marks.inline_code ?? null
-  };
+    inlineCode: schema.marks.code ?? schema.marks.inline_code ?? null,
+    highlight: schema.marks.madoHighlight ?? null,
+    superscript: schema.marks.madoSuperscript ?? null,
+    subscript: schema.marks.madoSubscript ?? null,
+    kbd: schema.marks.madoKeyboard ?? null
+  } satisfies Record<InlineStyleId, MarkType | null>;
 }
 
-function applyInlinePresetToTransaction(
+function removeInlineMarksFromTransaction(
   tr: EditorView['state']['tr'],
   schema: EditorView['state']['schema'],
   from: number,
-  to: number,
-  preset: InlineFormatPreset
+  to: number
 ): void {
   const markTypes = getSupportedInlineMarkTypes(schema);
 
@@ -6788,43 +6781,57 @@ function applyInlinePresetToTransaction(
       tr.removeMark(from, to, markType);
     }
   }
-
-  switch (preset) {
-    case 'strong':
-      if (markTypes.strong) {
-        tr.addMark(from, to, markTypes.strong.create());
-      }
-      break;
-    case 'emphasis':
-      if (markTypes.emphasis) {
-        tr.addMark(from, to, markTypes.emphasis.create());
-      }
-      break;
-    case 'strong-emphasis':
-      if (markTypes.strong) {
-        tr.addMark(from, to, markTypes.strong.create());
-      }
-      if (markTypes.emphasis) {
-        tr.addMark(from, to, markTypes.emphasis.create());
-      }
-      break;
-    case 'strike':
-      if (markTypes.strike) {
-        tr.addMark(from, to, markTypes.strike.create());
-      }
-      break;
-    case 'inline-code':
-      if (markTypes.inlineCode) {
-        tr.addMark(from, to, markTypes.inlineCode.create());
-      }
-      break;
-    case 'plain':
-    default:
-      break;
-  }
 }
 
-function applyInlineFormatSelection(nextPreset: InlineFormatPreset): void {
+function toggleInlineStyleInTransaction(
+  tr: EditorView['state']['tr'],
+  schema: EditorView['state']['schema'],
+  doc: EditorView['state']['doc'],
+  from: number,
+  to: number,
+  style: InlineStyleId
+): void {
+  const markTypes = getSupportedInlineMarkTypes(schema);
+  const markType = markTypes[style];
+
+  if (!markType) {
+    return;
+  }
+
+  const hasMark = doc.rangeHasMark(from, to, markType);
+
+  if (style === 'inlineCode') {
+    if (hasMark) {
+      tr.removeMark(from, to, markType);
+      return;
+    }
+
+    removeInlineMarksFromTransaction(tr, schema, from, to);
+    tr.addMark(from, to, markType.create());
+    return;
+  }
+
+  if (markTypes.inlineCode) {
+    tr.removeMark(from, to, markTypes.inlineCode);
+  }
+
+  if (hasMark) {
+    tr.removeMark(from, to, markType);
+    return;
+  }
+
+  if (style === 'superscript' && markTypes.subscript) {
+    tr.removeMark(from, to, markTypes.subscript);
+  }
+
+  if (style === 'subscript' && markTypes.superscript) {
+    tr.removeMark(from, to, markTypes.superscript);
+  }
+
+  tr.addMark(from, to, markType.create());
+}
+
+function applyInlineFormatSelection(nextPreset: InlineStyleId | 'plain'): void {
   if (!activeHeadingMarkerState || !milkdownEditor || milkdownDocumentId !== activeHeadingMarkerState.documentId) {
     return;
   }
@@ -6848,7 +6855,11 @@ function applyInlineFormatSelection(nextPreset: InlineFormatPreset): void {
   }
 
   const tr = view.state.tr;
-  applyInlinePresetToTransaction(tr, view.state.schema, from, to, nextPreset);
+  if (nextPreset === 'plain') {
+    removeInlineMarksFromTransaction(tr, view.state.schema, from, to);
+  } else {
+    toggleInlineStyleInTransaction(tr, view.state.schema, view.state.doc, from, to, nextPreset);
+  }
 
   if (!tr.docChanged) {
     view.focus();
@@ -9069,7 +9080,7 @@ function buildActiveFormatContextItems(): ContextMenuItem[] {
     { kind: 'item', label: '\u9ad8\u4eae', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineHighlight), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineHighlight) },
     { kind: 'item', label: '\u4e0a\u6807', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSuperscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSuperscript) },
     { kind: 'item', label: '\u4e0b\u6807', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineSubscript), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineSubscript) },
-    { kind: 'item', label: '\u6309\u952e', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
+    { kind: 'item', label: '\u6309\u94ae', enabled: isEditorCommandCurrentlyEnabled(EDITOR_COMMAND_IDS.inlineKbd), action: () => executeEditorCommand(EDITOR_COMMAND_IDS.inlineKbd) }
   ];
 }
 

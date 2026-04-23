@@ -1662,7 +1662,7 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     .item(&editor_command_menu_item(
       app,
       "inline-kbd",
-      "\u{6309}\u{952e}",
+      "\u{6309}\u{94ae}",
       None,
     )?)
     .build()?;

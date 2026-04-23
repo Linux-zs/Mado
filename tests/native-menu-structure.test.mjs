@@ -27,3 +27,16 @@ test('native app menu includes vscode inspired appearance themes', () => {
     assert.match(rustSource, new RegExp(`theme: "${theme}"\\.to_string\\(\\)`));
   }
 });
+
+test('native format menu includes extended inline styles', () => {
+  for (const commandId of [
+    'inline-highlight',
+    'inline-superscript',
+    'inline-subscript',
+    'inline-kbd'
+  ]) {
+    assert.match(rustSource, new RegExp(`"${commandId}"`));
+  }
+
+  assert.match(rustSource, /\\u\{6309\}\\u\{94ae\}/);
+});

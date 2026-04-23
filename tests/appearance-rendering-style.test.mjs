@@ -75,6 +75,26 @@ function getLastRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
+function getRuleBodyStartingWith(selectorPrefix) {
+  const start = css.indexOf(selectorPrefix);
+  assert.notEqual(start, -1, `Missing selector prefix: ${selectorPrefix}`);
+  const bodyStart = css.indexOf('{', start) + 1;
+  let depth = 1;
+  let index = bodyStart;
+
+  while (index < css.length && depth > 0) {
+    const character = css[index];
+    if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+    }
+    index += 1;
+  }
+
+  return css.slice(bodyStart, index - 1);
+}
+
 test('clear type critical surfaces use opaque theme colors', () => {
   for (const selector of themeSelectors) {
     const rule = getRuleBody(selector);
@@ -97,6 +117,25 @@ test('theme rules define markdown code and syntax color tokens', () => {
       '--color-code-keyword',
       '--color-code-string',
       '--color-code-title'
+    ]) {
+      assert.match(rule, new RegExp(`${token}:\\s*[^;]+;`), `${selector} missing ${token}`);
+    }
+  }
+});
+
+test('theme rules define floating badge and inline html style tokens', () => {
+  for (const selector of themeSelectors) {
+    const rule = getRuleBody(selector);
+    for (const token of [
+      '--color-floating-surface',
+      '--color-floating-border',
+      '--color-floating-text',
+      '--color-floating-muted',
+      '--color-mark-bg',
+      '--color-mark-text',
+      '--color-kbd-bg',
+      '--color-kbd-border',
+      '--color-kbd-text'
     ]) {
       assert.match(rule, new RegExp(`${token}:\\s*[^;]+;`), `${selector} missing ${token}`);
     }
@@ -134,4 +173,18 @@ test('sidebar file tree and outline use enlarged compact typography', () => {
   assert.match(outlineItemRule, /padding:\s*5px 10px;/);
   assert.match(outlineItemRule, /font-size:\s*16px;/);
   assert.match(outlineItemRule, /line-height:\s*1\.28;/);
+});
+
+test('heading badge and menu use theme-aware floating colors', () => {
+  const badgeRule = getExactRuleBody('.heading-level-badge');
+  const badgeOpenRule = getRuleBodyStartingWith('.heading-level-badge:hover,');
+  const menuRule = getExactRuleBody('.heading-level-menu');
+
+  assert.match(badgeRule, /border:\s*1px solid var\(--color-floating-border\);/);
+  assert.match(badgeRule, /background:\s*var\(--color-floating-surface\);/);
+  assert.match(badgeRule, /color:\s*var\(--color-floating-muted\);/);
+  assert.match(badgeRule, /opacity:\s*0\.68;/);
+  assert.match(badgeOpenRule, /color:\s*var\(--color-floating-text\);/);
+  assert.match(menuRule, /background:\s*var\(--color-floating-surface\);/);
+  assert.match(menuRule, /border:\s*1px solid var\(--color-floating-border\);/);
 });
