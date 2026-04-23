@@ -2997,17 +2997,40 @@ function applyAppearanceSettings(): void {
   const uiFontStack = resolveAppearanceFontStack({
     latin: appearanceSettings.fonts.latin,
     cjk: appearanceSettings.fonts.cjk,
-    fallback: ['"Microsoft YaHei UI"', '"Segoe UI"', '"PingFang SC"', '"Noto Sans CJK SC"', 'sans-serif']
+    fallback: [
+      '"Segoe UI Variable Text"',
+      '"Segoe UI Variable"',
+      '"Segoe UI"',
+      '"Microsoft YaHei UI"',
+      '"PingFang SC"',
+      '"Noto Sans CJK SC"',
+      'sans-serif'
+    ]
   });
   const bodyFontStack = resolveAppearanceFontStack({
     latin: appearanceSettings.fonts.latin,
     cjk: appearanceSettings.fonts.cjk,
-    fallback: ['"Microsoft YaHei UI"', '"Segoe UI"', '"PingFang SC"', '"Noto Sans CJK SC"', 'sans-serif']
+    fallback: [
+      '"Segoe UI Variable Text"',
+      '"Segoe UI Variable"',
+      '"Segoe UI"',
+      '"Microsoft YaHei UI"',
+      '"PingFang SC"',
+      '"Noto Sans CJK SC"',
+      'sans-serif'
+    ]
   });
   const codeFontStack = resolveAppearanceFontStack({
     latin: appearanceSettings.fonts.code,
     cjk: appearanceSettings.fonts.cjk,
-    fallback: ['Consolas', '"Cascadia Code"', '"Microsoft YaHei UI"', 'monospace']
+    fallback: [
+      '"Cascadia Code"',
+      'Consolas',
+      '"Segoe UI Variable Text"',
+      '"Segoe UI"',
+      '"Microsoft YaHei UI"',
+      'monospace'
+    ]
   });
 
   root.dataset.theme = displayTheme;

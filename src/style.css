@@ -8,10 +8,11 @@
   --motion-slow: 200ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-fade-distance: 8px;
-  --font-ui: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
-  --font-body: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
-  --font-heading: 'Microsoft YaHei UI', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
-  --font-code: Consolas, 'Cascadia Code', 'Microsoft YaHei UI', monospace;
+  --editor-max-width: 960px;
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --font-body: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --font-heading: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --font-code: 'Cascadia Code', Consolas, 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI', monospace;
   --font-body-size: 18px;
   --font-body-weight: 400;
   --font-body-style: normal;
@@ -1314,14 +1315,18 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .source-editor-shell {
+  display: flex;
+  justify-content: center;
   width: 100%;
   height: 100%;
   min-height: 0;
 }
 
 .source-editor {
-  width: 100%;
+  display: block;
+  width: min(100%, var(--editor-max-width));
   height: 100%;
+  margin: 0 auto;
   padding: 22px 26px 24px;
   border: 0;
   background: var(--color-workspace-surface);
@@ -1362,18 +1367,25 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .milkdown-host {
   position: relative;
+  display: flex;
+  justify-content: center;
   min-height: 100%;
   padding: 26px;
 }
 
 .milkdown-host .milkdown {
+  width: 100%;
+  max-width: var(--editor-max-width);
   min-height: 100%;
   color: var(--color-editor-text);
   background: transparent;
 }
 
 .milkdown-host .ProseMirror {
+  width: 100%;
+  max-width: var(--editor-max-width);
   min-height: 100%;
+  margin: 0 auto;
   outline: none;
   word-break: break-word;
   font: var(--font-body-style) var(--font-body-weight) var(--font-body-size)/1.78 var(--font-body);
@@ -2098,6 +2110,13 @@ body.is-resizing-layout .workspace-resize-handle::after,
 
 .viewer-empty-text {
   color: var(--color-empty-text);
+}
+
+.viewer-content-milkdown .viewer-line,
+.viewer-content-source .viewer-line {
+  width: min(100%, var(--editor-max-width));
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .modal-overlay {
