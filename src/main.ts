@@ -8075,10 +8075,23 @@ function startCodeBlockLanguageEdit(documentId: string, pos: number, language: s
   focusCodeBlockLanguageInput(documentId, pos);
 }
 
-function createCodeBlockLanguageShell(pre: HTMLElement): HTMLDivElement {
+function getCodeBlockLanguageOverlayRoot(host: HTMLDivElement): HTMLDivElement {
+  const existingRoot = host.querySelector<HTMLDivElement>(':scope > .code-block-language-overlay-root');
+
+  if (existingRoot) {
+    return existingRoot;
+  }
+
+  const root = document.createElement('div');
+  root.className = 'code-block-language-overlay-root';
+  host.append(root);
+  return root;
+}
+
+function createCodeBlockLanguageShell(root: HTMLDivElement): HTMLDivElement {
   const shell = document.createElement('div');
   shell.className = 'code-block-language-shell';
-  pre.append(shell);
+  root.append(shell);
   return shell;
 }
 
@@ -8086,9 +8099,12 @@ function renderCodeBlockLanguageShell(
   shell: HTMLDivElement,
   documentId: string,
   pos: number,
-  language: string | null
+  language: string | null,
+  anchor: { top: number; left: number }
 ): void {
   shell.dataset.codeBlockPos = String(pos);
+  shell.style.top = `${anchor.top}px`;
+  shell.style.left = `${anchor.left}px`;
   shell.replaceChildren();
 
   const editState =
@@ -8171,6 +8187,8 @@ function renderCodeBlockLanguageControls(documentId: string): void {
   }
 
   const view = milkdownEditor.action((ctx) => ctx.get(editorViewCtx));
+  const root = getCodeBlockLanguageOverlayRoot(milkdownHost);
+  const hostBounds = milkdownHost.getBoundingClientRect();
   const activePositions = new Set<string>();
 
   view.state.doc.descendants((node, pos) => {
@@ -8185,15 +8203,26 @@ function renderCodeBlockLanguageControls(documentId: string): void {
     }
 
     activePositions.add(String(pos));
+    const blockBounds = pre.getBoundingClientRect();
+    const anchor = {
+      top: Math.max(0, blockBounds.top - hostBounds.top + 10),
+      left: Math.max(0, blockBounds.right - hostBounds.left - 12)
+    };
     const shell =
-      pre.querySelector<HTMLDivElement>(':scope > .code-block-language-shell') ??
-      createCodeBlockLanguageShell(pre);
+      root.querySelector<HTMLDivElement>(`:scope > .code-block-language-shell[data-code-block-pos="${pos}"]`) ??
+      createCodeBlockLanguageShell(root);
 
-    renderCodeBlockLanguageShell(shell, documentId, pos, normalizeCodeBlockLanguage(node.attrs.language));
+    renderCodeBlockLanguageShell(
+      shell,
+      documentId,
+      pos,
+      normalizeCodeBlockLanguage(node.attrs.language),
+      anchor
+    );
     return false;
   });
 
-  for (const shell of Array.from(milkdownHost.querySelectorAll<HTMLDivElement>('.code-block-language-shell'))) {
+  for (const shell of Array.from(root.querySelectorAll<HTMLDivElement>('.code-block-language-shell'))) {
     if (!activePositions.has(shell.dataset.codeBlockPos ?? '')) {
       shell.remove();
     }

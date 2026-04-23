@@ -1591,7 +1591,6 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
       None,
     )?)
     .build()?;
-  let view_menu = SubmenuBuilder::new(app, "\u{89c6}\u{56fe}(&V)").build()?;
   let appearance_menu = build_appearance_menu(app)?;
   let help_menu = SubmenuBuilder::new(app, "\u{5e2e}\u{52a9}(&H)").build()?;
 
@@ -1601,7 +1600,6 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
       &edit_menu,
       &paragraph_menu,
       &format_menu,
-      &view_menu,
       &appearance_menu,
       &help_menu,
     ])
