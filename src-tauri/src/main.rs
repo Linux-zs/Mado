@@ -80,6 +80,7 @@ enum AppCommandPayload {
   CloseFile,
   ClearRecentFiles,
   OpenRecentFile { path: String },
+  OpenPendingExternalFiles,
   EditCommand {
     #[serde(rename = "commandId")]
     command_id: String,
@@ -161,6 +162,7 @@ struct RecentMenuEntry {
 }
 
 struct RecentFileMenuState(Mutex<Vec<RecentMenuEntry>>);
+struct PendingOpenPaths(Mutex<Vec<String>>);
 
 #[derive(Clone, Copy)]
 struct TextFileScanLimits {
@@ -1639,6 +1641,83 @@ fn disable_windows_browser_accelerator_keys<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(not(windows))]
 fn disable_windows_browser_accelerator_keys<R: Runtime>(_app: &AppHandle<R>) {}
 
+fn resolve_external_open_path(argument: &str, cwd: Option<&Path>) -> Option<String> {
+  let trimmed = argument.trim();
+
+  if trimmed.is_empty() {
+    return None;
+  }
+
+  let path = PathBuf::from(trimmed);
+  let resolved = if path.is_absolute() {
+    path
+  } else if let Some(cwd) = cwd {
+    cwd.join(path)
+  } else {
+    path
+  };
+
+  if !resolved.is_file() {
+    return None;
+  }
+
+  Some(resolved.to_string_lossy().into_owned())
+}
+
+fn collect_external_open_paths<I, S>(arguments: I, cwd: Option<&Path>) -> Vec<String>
+where
+  I: IntoIterator<Item = S>,
+  S: AsRef<str>,
+{
+  arguments
+    .into_iter()
+    .filter_map(|argument| resolve_external_open_path(argument.as_ref(), cwd))
+    .collect()
+}
+
+fn enqueue_pending_open_paths<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) -> bool {
+  if paths.is_empty() {
+    return false;
+  }
+
+  let Some(state) = app.try_state::<PendingOpenPaths>() else {
+    eprintln!("Pending external open path state is unavailable.");
+    return false;
+  };
+
+  let Ok(mut pending) = state.0.lock() else {
+    eprintln!("Failed to lock pending external open path state.");
+    return false;
+  };
+
+  pending.extend(paths);
+  true
+}
+
+fn reveal_main_window<R: Runtime>(app: &AppHandle<R>) {
+  let Some(main_window) = app.get_webview_window("main") else {
+    eprintln!("Failed to resolve main webview while revealing the app for an external file open.");
+    return;
+  };
+
+  let _ = main_window.unminimize();
+  let _ = main_window.show();
+  let _ = main_window.set_focus();
+}
+
+fn emit_open_pending_external_files<R: Runtime>(app: &AppHandle<R>) {
+  emit_app_command(app, AppCommandPayload::OpenPendingExternalFiles);
+}
+
+#[tauri::command]
+fn take_pending_open_paths(state: State<'_, PendingOpenPaths>) -> Result<Vec<String>, String> {
+  let Ok(mut pending) = state.0.lock() else {
+    return Err("Failed to access pending external open paths.".to_string());
+  };
+
+  Ok(std::mem::take(&mut *pending))
+}
+
 fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
   match menu_id {
     MENU_NEW_FILE_ID => Some(AppCommandPayload::NewFile),
@@ -1678,7 +1757,17 @@ fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
 fn main() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+      let current_directory = Path::new(&cwd);
+      let paths = collect_external_open_paths(args.iter().skip(1).map(String::as_str), Some(current_directory));
+
+      if enqueue_pending_open_paths(app, paths) {
+        reveal_main_window(app);
+        emit_open_pending_external_files(app);
+      }
+    }))
     .manage(RecentFileMenuState(Mutex::new(Vec::new())))
+    .manage(PendingOpenPaths(Mutex::new(Vec::new())))
     .invoke_handler(tauri::generate_handler![
       open_markdown_file,
       list_text_files,
@@ -1692,6 +1781,7 @@ fn main() {
       reveal_path_in_explorer,
       validate_markdown_file_name,
       validate_markdown_save_path,
+      take_pending_open_paths,
       list_installed_font_families,
       update_recent_files_menu,
       update_menu_enabled_states,
@@ -1701,6 +1791,10 @@ fn main() {
       let menu = build_app_menu(app.handle())?;
       app.set_menu(menu)?;
       disable_windows_browser_accelerator_keys(app.handle());
+
+      let current_directory = std::env::current_dir().ok();
+      let initial_paths = collect_external_open_paths(std::env::args().skip(1), current_directory.as_deref());
+      enqueue_pending_open_paths(app.handle(), initial_paths);
       Ok(())
     })
     .on_menu_event(|app, event| {
@@ -2308,6 +2402,8 @@ mod tests {
     .expect("theme payload should serialize");
     let panel_value = serde_json::to_value(AppCommandPayload::OpenAppearanceFontPanel)
       .expect("panel payload should serialize");
+    let pending_open_value = serde_json::to_value(AppCommandPayload::OpenPendingExternalFiles)
+      .expect("pending external open payload should serialize");
 
     assert_eq!(
       theme_value,
@@ -2322,6 +2418,34 @@ mod tests {
         "type": "openAppearanceFontPanel"
       })
     );
+    assert_eq!(
+      pending_open_value,
+      json!({
+        "type": "openPendingExternalFiles"
+      })
+    );
+  }
+
+  #[test]
+  fn collect_external_open_paths_keeps_existing_files_and_resolves_relative_paths() {
+    let root = create_test_dir("external-open");
+    let existing_file = root.join("notes.md");
+    let missing_file = root.join("missing.md");
+    write_file(&existing_file, "# external open");
+
+    let paths = collect_external_open_paths(
+      vec![
+        "notes.md".to_string(),
+        missing_file.to_string_lossy().into_owned(),
+        "".to_string(),
+        "--flag".to_string(),
+      ],
+      Some(root.as_path()),
+    );
+
+    assert_eq!(paths, vec![existing_file.to_string_lossy().into_owned()]);
+
+    fs::remove_dir_all(root).expect("test directory should be removed");
   }
 
   #[test]

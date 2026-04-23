@@ -606,6 +606,7 @@ type AppCommandPayload =
   | { type: 'closeFile' }
   | { type: 'clearRecentFiles' }
   | { type: 'openRecentFile'; path: string }
+  | { type: 'openPendingExternalFiles' }
   | { type: 'setAppearanceTheme'; theme: AppearanceTheme }
   | { type: 'openAppearanceFontPanel' }
   | { type: 'editCommand'; commandId: EditCommandId }
@@ -724,6 +725,8 @@ let workspaceResizeDragLimits: { min: number; max: number } | null = null;
 let workspaceResizePendingWidth: number | null = null;
 let workspaceResizePendingFrame: number | null = null;
 let recentFilesMenuSyncTimer: number | null = null;
+let pendingExternalOpenFlushPromise: Promise<void> | null = null;
+let pendingExternalOpenFlushQueued = false;
 let outlineSidebarRefreshTimer: number | null = null;
 let outlineSidebarRefreshDocumentId: string | null = null;
 let renderFrame: number | null = null;
@@ -7535,6 +7538,8 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
       return true;
     case 'openRecentFile':
       return typeof candidate.path === 'string' && candidate.path.length > 0;
+    case 'openPendingExternalFiles':
+      return true;
     case 'setAppearanceTheme':
       return candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark';
     case 'openAppearanceFontPanel':
@@ -7747,6 +7752,9 @@ async function dispatchAppCommand(
       return;
     case 'openRecentFile':
       await openDocumentFromPath(command.path);
+      return;
+    case 'openPendingExternalFiles':
+      await flushPendingExternalOpenFiles();
       return;
     case 'setAppearanceTheme':
       setAppearanceTheme(command.theme);
@@ -10282,6 +10290,43 @@ async function openDocumentFromPath(
     }
   }
 }
+
+async function flushPendingExternalOpenFiles(): Promise<void> {
+  pendingExternalOpenFlushQueued = true;
+
+  if (pendingExternalOpenFlushPromise) {
+    return pendingExternalOpenFlushPromise;
+  }
+
+  pendingExternalOpenFlushPromise = (async () => {
+    while (pendingExternalOpenFlushQueued) {
+      pendingExternalOpenFlushQueued = false;
+
+      let paths: string[];
+
+      try {
+        paths = await invoke<string[]>('take_pending_open_paths');
+      } catch (error) {
+        console.error('Failed to read pending external open paths.', error);
+        showHeaderNotice('无法读取外部打开请求。', true);
+        break;
+      }
+
+      for (const path of paths) {
+        if (typeof path !== 'string' || path.trim().length === 0) {
+          continue;
+        }
+
+        await openDocumentFromPath(path);
+      }
+    }
+  })().finally(() => {
+    pendingExternalOpenFlushPromise = null;
+  });
+
+  return pendingExternalOpenFlushPromise;
+}
+
 async function activateDocument(
   documentId: string,
   activationToken: number = beginMilkdownActivation()
@@ -10727,6 +10772,8 @@ await listen<unknown>(APP_COMMAND_EVENT, async (event) => {
     await dispatchAppCommand(event.payload, 'native-menu');
   }
 });
+
+void flushPendingExternalOpenFiles();
 
 window.setTimeout(async () => {
   if (currentDirectoryPath) {
