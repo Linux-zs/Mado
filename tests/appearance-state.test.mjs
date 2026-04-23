@@ -34,7 +34,7 @@ test('createDefaultAppearanceSettings uses github light as the default theme and
     },
     bodyTypography: {
       style: 'normal',
-      sizePx: 18
+      sizePx: 16
     },
     codeTypography: {
       style: 'normal',

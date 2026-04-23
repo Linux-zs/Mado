@@ -24,10 +24,10 @@ function getRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
-test('editor body text uses 18px baseline while source editor remains unchanged', () => {
+test('editor body text uses 16px baseline while source editor remains unchanged', () => {
   const rootRule = getRuleBody(':root');
 
-  assert.match(rootRule, /--font-body-size:\s*18px;/);
+  assert.match(rootRule, /--font-body-size:\s*16px;/);
   assert.match(rootRule, /--font-code-size:\s*13px;/);
   assert.match(
     getRuleBody('.milkdown-host .ProseMirror'),

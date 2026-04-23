@@ -24,9 +24,9 @@ function getRuleBody(selector) {
   return css.slice(bodyStart, index - 1);
 }
 
-test('editor surfaces clamp the readable column width to 960px', () => {
+test('editor surfaces clamp the readable column width to 1280px', () => {
   const rootRule = getRuleBody(':root');
-  assert.match(rootRule, /--editor-max-width:\s*960px;/);
+  assert.match(rootRule, /--editor-max-width:\s*1280px;/);
 
   const sourceShellRule = getRuleBody('.source-editor-shell');
   assert.match(sourceShellRule, /justify-content:\s*center;/);

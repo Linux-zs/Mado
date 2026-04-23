@@ -8,12 +8,12 @@
   --motion-slow: 200ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-fade-distance: 8px;
-  --editor-max-width: 960px;
+  --editor-max-width: 1280px;
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-body: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-heading: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --font-code: 'Cascadia Code', Consolas, 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI', monospace;
-  --font-body-size: 18px;
+  --font-body-size: 16px;
   --font-body-weight: 400;
   --font-body-style: normal;
   --font-code-size: 13px;
