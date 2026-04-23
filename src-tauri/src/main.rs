@@ -40,10 +40,7 @@ const MENU_RECENT_FILE_PREFIX: &str = "file-recent-open:";
 const MENU_APPEARANCE_THEME_SYSTEM_ID: &str = "appearance-theme:system";
 const MENU_APPEARANCE_THEME_LIGHT_ID: &str = "appearance-theme:light";
 const MENU_APPEARANCE_THEME_DARK_ID: &str = "appearance-theme:dark";
-const MENU_APPEARANCE_FONT_PANEL_PREFIX: &str = "appearance-font-panel:";
-const MENU_APPEARANCE_FONT_PANEL_CJK_ID: &str = "appearance-font-panel:cjk";
-const MENU_APPEARANCE_FONT_PANEL_LATIN_ID: &str = "appearance-font-panel:latin";
-const MENU_APPEARANCE_FONT_PANEL_CODE_ID: &str = "appearance-font-panel:code";
+const MENU_APPEARANCE_FONT_PANEL_OPEN_ID: &str = "appearance-font-panel:open";
 const RECENT_FILES_MENU_LIMIT: usize = 10;
 const APP_COMMAND_EVENT: &str = "request-app-command";
 const EDITOR_COMMAND_MENU_PREFIX: &str = "editor-command:";
@@ -94,9 +91,7 @@ enum AppCommandPayload {
   SetAppearanceTheme {
     theme: String,
   },
-  OpenAppearanceFontPanel {
-    slot: String,
-  },
+  OpenAppearanceFontPanel,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -1058,14 +1053,8 @@ fn check_menu_item<R: Runtime>(
     .build(app)
 }
 
-fn appearance_font_panel_menu_item_id(slot: &str) -> String {
-  format!("{MENU_APPEARANCE_FONT_PANEL_PREFIX}{slot}")
-}
-
-fn appearance_font_panel_slot_from_menu_id(menu_id: &str) -> Option<String> {
-  menu_id
-    .strip_prefix(MENU_APPEARANCE_FONT_PANEL_PREFIX)
-    .map(|slot| slot.to_string())
+fn appearance_font_panel_menu_item_id() -> &'static str {
+  MENU_APPEARANCE_FONT_PANEL_OPEN_ID
 }
 
 fn normalize_windows_font_menu_label(value_name: &str) -> Option<String> {
@@ -1190,30 +1179,15 @@ fn build_appearance_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submen
       false,
     )?)
     .build()?;
-  let fonts_menu = SubmenuBuilder::new(app, "\u{5b57}\u{4f53}")
-    .item(&menu_item(
-      app,
-      &appearance_font_panel_menu_item_id("cjk"),
-      "\u{4e2d}\u{6587}\u{5b57}\u{4f53}...",
-      None,
-    )?)
-    .item(&menu_item(
-      app,
-      &appearance_font_panel_menu_item_id("latin"),
-      "\u{82f1}\u{6587}\u{5b57}\u{4f53}...",
-      None,
-    )?)
-    .item(&menu_item(
-      app,
-      &appearance_font_panel_menu_item_id("code"),
-      "\u{4ee3}\u{7801}\u{5b57}\u{4f53}...",
-      None,
-    )?)
-    .build()?;
 
   SubmenuBuilder::new(app, "\u{5916}\u{89c2}(&A)")
     .item(&theme_menu)
-    .item(&fonts_menu)
+    .item(&menu_item(
+      app,
+      appearance_font_panel_menu_item_id(),
+      "\u{5b57}\u{4f53}...",
+      None,
+    )?)
     .build()
 }
 
@@ -1697,15 +1671,7 @@ fn app_command_for_menu_id(menu_id: &str) -> Option<AppCommandPayload> {
     MENU_APPEARANCE_THEME_DARK_ID => Some(AppCommandPayload::SetAppearanceTheme {
       theme: "dark".to_string(),
     }),
-    MENU_APPEARANCE_FONT_PANEL_CJK_ID => Some(AppCommandPayload::OpenAppearanceFontPanel {
-      slot: "cjk".to_string(),
-    }),
-    MENU_APPEARANCE_FONT_PANEL_LATIN_ID => Some(AppCommandPayload::OpenAppearanceFontPanel {
-      slot: "latin".to_string(),
-    }),
-    MENU_APPEARANCE_FONT_PANEL_CODE_ID => Some(AppCommandPayload::OpenAppearanceFontPanel {
-      slot: "code".to_string(),
-    }),
+    MENU_APPEARANCE_FONT_PANEL_OPEN_ID => Some(AppCommandPayload::OpenAppearanceFontPanel),
     MENU_CLEAR_RECENT_FILES_ID => Some(AppCommandPayload::ClearRecentFiles),
     _ => None,
   }
@@ -1754,11 +1720,6 @@ fn main() {
             command_id: command_id.to_string(),
           },
         );
-        return;
-      }
-
-      if let Some(slot) = appearance_font_panel_slot_from_menu_id(menu_id) {
-        emit_app_command(app, AppCommandPayload::OpenAppearanceFontPanel { slot });
         return;
       }
 
@@ -2347,10 +2308,8 @@ mod tests {
       theme: "dark".to_string(),
     })
     .expect("theme payload should serialize");
-    let panel_value = serde_json::to_value(AppCommandPayload::OpenAppearanceFontPanel {
-      slot: "code".to_string(),
-    })
-    .expect("panel payload should serialize");
+    let panel_value = serde_json::to_value(AppCommandPayload::OpenAppearanceFontPanel)
+      .expect("panel payload should serialize");
 
     assert_eq!(
       theme_value,
@@ -2362,8 +2321,7 @@ mod tests {
     assert_eq!(
       panel_value,
       json!({
-        "type": "openAppearanceFontPanel",
-        "slot": "code"
+        "type": "openAppearanceFontPanel"
       })
     );
   }
@@ -2398,24 +2356,16 @@ mod tests {
       Some(AppCommandPayload::SetAppearanceTheme { theme }) if theme == "dark"
     ));
     assert!(matches!(
-      app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_CJK_ID),
-      Some(AppCommandPayload::OpenAppearanceFontPanel { slot }) if slot == "cjk"
-    ));
-    assert!(matches!(
-      app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_CODE_ID),
-      Some(AppCommandPayload::OpenAppearanceFontPanel { slot }) if slot == "code"
+      app_command_for_menu_id(MENU_APPEARANCE_FONT_PANEL_OPEN_ID),
+      Some(AppCommandPayload::OpenAppearanceFontPanel)
     ));
 
     assert!(app_command_for_menu_id("missing-menu-id").is_none());
   }
 
   #[test]
-  fn appearance_font_panel_menu_item_id_round_trips_slot() {
-    let menu_id = appearance_font_panel_menu_item_id("latin");
-    let parsed = appearance_font_panel_slot_from_menu_id(&menu_id)
-      .expect("font panel menu id should round trip");
-
-    assert_eq!(parsed, "latin".to_string());
+  fn appearance_font_panel_menu_item_id_matches_open_id() {
+    assert_eq!(appearance_font_panel_menu_item_id(), MENU_APPEARANCE_FONT_PANEL_OPEN_ID);
   }
 
   #[test]

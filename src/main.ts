@@ -607,7 +607,7 @@ type AppCommandPayload =
   | { type: 'clearRecentFiles' }
   | { type: 'openRecentFile'; path: string }
   | { type: 'setAppearanceTheme'; theme: AppearanceTheme }
-  | { type: 'openAppearanceFontPanel'; slot: 'cjk' | 'latin' | 'code' }
+  | { type: 'openAppearanceFontPanel' }
   | { type: 'editCommand'; commandId: EditCommandId }
   | { type: 'editorCommand'; commandId: string };
 type AppearanceFontPanelSlot = keyof AppearanceSettings['fonts'];
@@ -2893,8 +2893,7 @@ function closeAppearanceFontPanel(): void {
   renderAppearanceFontBar();
 }
 
-async function openAppearanceFontPanel(slot: AppearanceFontPanelSlot): Promise<void> {
-  appearanceFontPanelActiveSlot = slot;
+async function openAppearanceFontPanel(): Promise<void> {
   appearanceFontPanelOpen = true;
   renderAppearanceFontBar();
   void ensureAppearanceFontFamilies();
@@ -7539,7 +7538,7 @@ function isAppCommandPayload(payload: unknown): payload is AppCommandPayload {
     case 'setAppearanceTheme':
       return candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark';
     case 'openAppearanceFontPanel':
-      return candidate.slot === 'cjk' || candidate.slot === 'latin' || candidate.slot === 'code';
+      return true;
     case 'editCommand':
       return (
         (candidate.commandId === 'undo' ||
@@ -7753,7 +7752,7 @@ async function dispatchAppCommand(
       setAppearanceTheme(command.theme);
       return;
     case 'openAppearanceFontPanel':
-      await openAppearanceFontPanel(command.slot);
+      await openAppearanceFontPanel();
       return;
     case 'editCommand':
       executeEditCommand(command.commandId);
