@@ -867,8 +867,8 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .file-list {
-  gap: 0;
-  --tree-row-height: 24px;
+  gap: 1px;
+  --tree-row-height: 25px;
   --tree-indent: 14px;
   --tree-hover-bg: rgba(60, 49, 35, 0.06);
   --tree-active-bg: rgba(154, 115, 69, 0.16);
@@ -882,10 +882,10 @@ body.is-resizing-layout .workspace-resize-handle::after,
   position: relative;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   width: 100%;
   min-height: var(--tree-row-height);
-  padding: 2px 8px 2px calc(6px + var(--tree-depth) * var(--tree-indent));
+  padding: 3px 8px 3px calc(6px + var(--tree-depth) * var(--tree-indent));
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -917,7 +917,7 @@ body.is-resizing-layout .workspace-resize-handle::after,
 }
 
 .file-tree-row.is-root .file-tree-label {
-  font-size: 14px;
+  font-size: 15px;
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
@@ -1037,8 +1037,8 @@ body.is-resizing-layout .workspace-resize-handle::after,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 15px;
-  line-height: 1.32;
+  font-size: 16px;
+  line-height: 1.36;
 }
 
 .file-tree-dirty-dot {

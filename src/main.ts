@@ -1138,7 +1138,10 @@ lineCountLabel.className = 'status-bar-metric';
 const charCountLabel = document.createElement('span');
 charCountLabel.className = 'status-bar-metric';
 
-statusBarRight.append(lineCountLabel, charCountLabel);
+const scaleLabel = document.createElement('span');
+scaleLabel.className = 'status-bar-metric';
+
+statusBarRight.append(lineCountLabel, charCountLabel, scaleLabel);
 statusBar.append(statusBarLeft, statusBarRight);
 
 const renameOverlay = document.createElement('div');
@@ -2067,6 +2070,8 @@ function renderStatusBar(): void {
 
   lineCountLabel.textContent = `${countEditorLines(currentText)} \u884c`;
   charCountLabel.textContent = `${countEditorCharacters(currentText)} \u5b57\u7b26`;
+  scaleLabel.textContent = `${editorScalePercent}%`;
+  scaleLabel.title = '\u5f53\u524d\u653e\u5927\u7f29\u5c0f\u6bd4\u4f8b';
 }
 
 function applySidebarCollapsedState(): void {
@@ -2962,6 +2967,7 @@ async function setEditorScalePercent(nextPercent: number): Promise<void> {
   editorScalePercent = normalized;
   await applyEditorScalePercent();
   persistEditorScalePercent();
+  renderStatusBar();
 }
 
 function persistAppearanceSettings(): void {

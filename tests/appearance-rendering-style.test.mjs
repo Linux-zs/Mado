@@ -157,11 +157,15 @@ test('text-heavy panels avoid opacity and transform transitions', () => {
 test('sidebar file tree and outline use enlarged compact typography', () => {
   assert.match(getExactRuleBody('.file-tree-row'), /color:\s*var\(--color-text-muted\);/);
   assert.doesNotMatch(getExactRuleBody('.file-tree-row.is-active'), /\bcolor\s*:/);
-  assert.match(getExactRuleBody('.file-tree-label'), /font-size:\s*15px;/);
+  assert.match(getExactRuleBody('.file-tree-label'), /font-size:\s*16px;/);
+  assert.match(getExactRuleBody('.file-tree-label'), /line-height:\s*1\.36;/);
   const rootLabelRule = getExactRuleBody('.file-tree-row.is-root .file-tree-label');
-  assert.match(rootLabelRule, /font-size:\s*14px;/);
+  assert.match(rootLabelRule, /font-size:\s*15px;/);
   assert.doesNotMatch(rootLabelRule, /font-weight\s*:/);
   assert.doesNotMatch(rootLabelRule, /\bcolor\s*:/);
+  assert.match(getLastRuleBody('.file-list'), /gap:\s*1px;/);
+  assert.match(getExactRuleBody('.file-tree-row'), /gap:\s*6px;/);
+  assert.match(getExactRuleBody('.file-tree-row'), /padding:\s*3px 8px 3px/);
   assert.doesNotMatch(css, /\.file-tree-row\.is-folder \.file-tree-label\s*\{[^}]*font-weight/s);
   assert.doesNotMatch(css, /\.file-tree-row\.is-file \.file-tree-label\s*\{[^}]*font-weight/s);
   assert.doesNotMatch(css, /\.file-tree-row\.is-open:not\(\.is-active\)\s*\{[^}]*color/s);
